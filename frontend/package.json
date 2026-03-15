@@ -1,0 +1,33 @@
+{
+  "name": "noctis-frontend",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "coverage": "vitest --coverage"
+  },
+  "dependencies": {
+    "vue": "^3.4.15",
+    "vue-router": "^4.2.5",
+    "pinia": "^2.1.7"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.3",
+    "@vitest/ui": "^1.2.1",
+    "@vue/test-utils": "^2.4.3",
+    "autoprefixer": "^10.4.17",
+    "happy-dom": "^12.10.3",
+    "jsdom": "^23.2.0",
+    "postcss": "^8.4.33",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.12",
+    "vitest": "^1.2.1",
+    "vue-tsc": "^2.0.6"
+  }
+}

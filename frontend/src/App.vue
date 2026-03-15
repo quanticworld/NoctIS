@@ -1,0 +1,80 @@
+<template>
+  <div class="min-h-screen bg-dark-300">
+    <!-- Top Navigation Bar -->
+    <nav class="bg-dark-100 border-b border-gray-700">
+      <div class="max-w-7xl mx-auto px-4">
+        <div class="flex items-center justify-between h-14">
+          <!-- Logo -->
+          <div class="flex items-center space-x-3">
+            <div class="w-2 h-2 bg-red-team-500"></div>
+            <h1 class="text-lg font-bold tracking-wide">
+              <span class="text-red-team-500">Noct</span><span class="text-gray-100">IS</span>
+            </h1>
+          </div>
+
+          <!-- Navigation Links -->
+          <div class="flex space-x-1">
+            <RouterLink
+              to="/"
+              class="nav-link"
+              :class="{ 'nav-link-active': $route.name === 'search' }"
+            >
+              SEARCH
+            </RouterLink>
+            <RouterLink
+              to="/settings"
+              class="nav-link"
+              :class="{ 'nav-link-active': $route.name === 'settings' }"
+            >
+              SETTINGS
+            </RouterLink>
+          </div>
+
+          <!-- Status Indicator -->
+          <div class="flex items-center space-x-2">
+            <div class="w-1.5 h-1.5 bg-green-500" :class="{ 'bg-green-500': isOnline, 'bg-gray-500': !isOnline }"></div>
+            <span class="text-xs text-gray-400 uppercase tracking-wider">{{ isOnline ? 'ONLINE' : 'OFFLINE' }}</span>
+          </div>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Main Content -->
+    <RouterView />
+  </div>
+</template>
+
+<script setup lang="ts">
+import { onMounted, ref } from 'vue'
+import { RouterLink, RouterView } from 'vue-router'
+import { useConfigStore } from '@/stores/config'
+
+const configStore = useConfigStore()
+const isOnline = ref(false)
+
+onMounted(async () => {
+  // Load config from localStorage
+  configStore.loadFromLocalStorage()
+
+  // Load config from API
+  await configStore.loadConfig()
+
+  // Check backend status
+  try {
+    const response = await fetch('/health')
+    isOnline.value = response.ok
+  } catch {
+    isOnline.value = false
+  }
+})
+</script>
+
+<style scoped>
+.nav-link {
+  @apply px-4 py-2 text-sm text-gray-400 hover:text-gray-100 hover:bg-dark-200 transition-colors uppercase tracking-wider;
+}
+
+.nav-link-active {
+  @apply text-red-team-500 bg-dark-200;
+}
+</style>

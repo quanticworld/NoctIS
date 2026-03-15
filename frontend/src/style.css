@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-gray-700;
+  }
+
+  body {
+    @apply font-mono;
+  }
+
+  input[type="text"],
+  input[type="number"],
+  textarea,
+  select {
+    @apply bg-dark-100 border border-gray-700 text-gray-100 px-3 py-2 focus:outline-none focus:border-red-team-500 transition-colors;
+  }
+
+  button {
+    @apply px-4 py-2 font-medium transition-all duration-200;
+  }
+
+  button:disabled {
+    @apply opacity-50 cursor-not-allowed;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-red-team-500 text-white hover:bg-red-team-600 focus:outline-none focus:ring-2 focus:ring-red-team-500 focus:ring-offset-2 focus:ring-offset-dark-300;
+  }
+
+  .btn-secondary {
+    @apply bg-dark-100 text-gray-100 border border-gray-700 hover:bg-dark-200 focus:outline-none focus:ring-2 focus:ring-gray-600;
+  }
+
+  .card {
+    @apply bg-dark-100 border border-gray-700;
+  }
+
+  .input-group {
+    @apply mb-4;
+  }
+
+  .label {
+    @apply block text-sm text-gray-400 mb-2 uppercase tracking-wide;
+  }
+
+  .progress-bar {
+    @apply h-1 bg-red-team-500 transition-all duration-300;
+  }
+
+  .stat-card {
+    @apply card p-4;
+  }
+
+  .stat-value {
+    @apply text-2xl font-bold text-red-team-500;
+  }
+
+  .stat-label {
+    @apply text-sm text-gray-400 uppercase tracking-wide;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-dark-300;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-gray-700;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-gray-600;
+}
+
+/* Match highlighting */
+.match-highlight {
+  @apply bg-red-team-500 bg-opacity-30 text-red-team-300 px-1;
+}
