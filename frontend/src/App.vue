@@ -30,10 +30,21 @@
             </RouterLink>
           </div>
 
-          <!-- Status Indicator -->
-          <div class="flex items-center space-x-2">
-            <div class="w-1.5 h-1.5 bg-green-500" :class="{ 'bg-green-500': isOnline, 'bg-gray-500': !isOnline }"></div>
-            <span class="text-xs text-gray-400 uppercase tracking-wider">{{ isOnline ? 'ONLINE' : 'OFFLINE' }}</span>
+          <!-- Status Indicators -->
+          <div class="flex items-center space-x-4">
+            <!-- Search Status -->
+            <div v-if="searchStore.isSearching" class="flex items-center space-x-2 px-3 py-1 bg-red-team-500 bg-opacity-10 border border-red-team-500">
+              <div class="w-1.5 h-1.5 bg-red-team-500 animate-pulse"></div>
+              <span class="text-xs text-red-team-500 uppercase tracking-wider">
+                SEARCHING {{ searchStore.filesScanned.toLocaleString() }} files
+              </span>
+            </div>
+
+            <!-- Backend Status -->
+            <div class="flex items-center space-x-2">
+              <div class="w-1.5 h-1.5" :class="{ 'bg-green-500': isOnline, 'bg-gray-500': !isOnline }"></div>
+              <span class="text-xs text-gray-400 uppercase tracking-wider">{{ isOnline ? 'ONLINE' : 'OFFLINE' }}</span>
+            </div>
           </div>
         </div>
       </div>
@@ -48,8 +59,10 @@
 import { onMounted, ref } from 'vue'
 import { RouterLink, RouterView } from 'vue-router'
 import { useConfigStore } from '@/stores/config'
+import { useSearchStore } from '@/stores/search'
 
 const configStore = useConfigStore()
+const searchStore = useSearchStore()
 const isOnline = ref(false)
 
 onMounted(async () => {
