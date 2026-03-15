@@ -21,8 +21,10 @@ class RipgrepService:
         elif request.template == RegexTemplate.NAME_SEARCH:
             if not request.first_name or not request.last_name:
                 raise ValueError("Name search requires first_name and last_name")
-            first = re.escape(request.first_name)
-            last = re.escape(request.last_name)
+            # Don't escape to allow regex patterns (e.g., .*, \d+, etc.)
+            # Users can input regex directly for flexible matching
+            first = request.first_name
+            last = request.last_name
             return f"({first}.*{last}|{last}.*{first})"
 
         elif request.template == RegexTemplate.EMAIL:
@@ -134,7 +136,10 @@ class RipgrepService:
 
         try:
             # Read output line by line
+            lines_processed = 0
             async for line in process.stdout:
+                lines_processed += 1
+
                 try:
                     import json
 
@@ -148,28 +153,6 @@ class RipgrepService:
                         path_data = data.get("data", {}).get("path", {})
                         current_file = path_data.get("text", "")
                         files_scanned += 1
-
-                        # Send progress update every 0.5 seconds
-                        current_time = time.time()
-                        if current_time - last_progress_time >= 0.5:
-                            elapsed = current_time - start_time
-                            speed = files_scanned / elapsed if elapsed > 0 else 0
-
-                            # Calculate ETA (only if we know total)
-                            eta = None
-                            if speed > 0 and total_files and total_files > 0:
-                                remaining = total_files - files_scanned
-                                eta = remaining / speed
-
-                            yield SearchProgress(
-                                files_scanned=files_scanned,
-                                total_files=total_files,  # Can be None
-                                current_file=current_file,
-                                matches_found=matches_found,
-                                speed=speed,
-                                eta_seconds=eta,
-                            )
-                            last_progress_time = current_time
 
                     elif msg_type == "match":
                         # Match found
@@ -200,6 +183,37 @@ class RipgrepService:
                                 match_end=match_end,
                             )
                         )
+
+                    # Send periodic progress updates (every 0.5s)
+                    current_time = time.time()
+                    if current_time - last_progress_time >= 0.5:
+                        elapsed = current_time - start_time
+                        # Calculate speed based on files_scanned OR lines_processed as fallback
+                        if files_scanned > 0:
+                            speed = files_scanned / elapsed if elapsed > 0 else 0
+                        else:
+                            # Fallback: show activity even if no "begin" messages
+                            speed = lines_processed / elapsed if elapsed > 0 else 0
+
+                        # Calculate ETA (only if we know total)
+                        eta = None
+                        if speed > 0 and total_files and total_files > 0:
+                            remaining = total_files - files_scanned
+                            eta = remaining / speed
+
+                        # Update current_file to show activity
+                        if not current_file:
+                            current_file = f"Processing... ({lines_processed} messages)"
+
+                        yield SearchProgress(
+                            files_scanned=files_scanned,
+                            total_files=total_files,
+                            current_file=current_file,
+                            matches_found=matches_found,
+                            speed=speed,
+                            eta_seconds=eta,
+                        )
+                        last_progress_time = current_time
 
                 except json.JSONDecodeError:
                     # Skip invalid JSON lines

@@ -18,18 +18,18 @@ class TestRipgrepService:
         pattern = RipgrepService.build_pattern(request)
         assert pattern == r"(John.*Doe|Doe.*John)"
 
-    def test_build_pattern_name_search_escaping(self):
-        """Test name search with special regex characters"""
+    def test_build_pattern_name_search_with_regex(self):
+        """Test name search with regex patterns (no escaping)"""
         request = SearchRequest(
             template=RegexTemplate.NAME_SEARCH,
-            first_name="O'Brien",
-            last_name="Smith-Jones",
+            first_name=".*",
+            last_name="scholtz",
             search_path="/tmp",
         )
         pattern = RipgrepService.build_pattern(request)
-        # Should escape special characters
-        assert "\\'" in pattern or "O'Brien" in pattern
-        assert "Smith-Jones" in pattern or "Smith\\-Jones" in pattern
+        # Should NOT escape, allow regex directly
+        assert pattern == r"(.*.*scholtz|scholtz.*.*)"
+        assert "\\." not in pattern  # Not escaped
 
     def test_build_pattern_email(self):
         """Test email pattern"""

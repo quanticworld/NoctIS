@@ -16,6 +16,12 @@ export const useSearchStore = defineStore('search', () => {
 
   const ws = ref<WebSocket | null>(null)
 
+  // Search form state (persists across navigation)
+  const selectedTemplate = ref('name_search')
+  const firstName = ref('')
+  const lastName = ref('')
+  const customPattern = ref('')
+
   const progressPercentage = computed(() => {
     if (!totalFiles.value) return 0
     return Math.round((filesScanned.value / totalFiles.value) * 100)
@@ -156,5 +162,10 @@ export const useSearchStore = defineStore('search', () => {
     startSearch,
     cancelSearch,
     clearResults,
+    // Form state
+    selectedTemplate,
+    firstName,
+    lastName,
+    customPattern,
   }
 })

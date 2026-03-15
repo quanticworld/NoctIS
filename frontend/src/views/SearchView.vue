@@ -175,10 +175,23 @@ const configStore = useConfigStore()
 const searchStore = useSearchStore()
 const statsStore = useStatsStore()
 
-const selectedTemplate = ref('name_search')
-const firstName = ref('')
-const lastName = ref('')
-const customPattern = ref('')
+// Use store refs for form state (persists across navigation)
+const selectedTemplate = computed({
+  get: () => searchStore.selectedTemplate,
+  set: (value) => { searchStore.selectedTemplate = value }
+})
+const firstName = computed({
+  get: () => searchStore.firstName,
+  set: (value) => { searchStore.firstName = value }
+})
+const lastName = computed({
+  get: () => searchStore.lastName,
+  set: (value) => { searchStore.lastName = value }
+})
+const customPattern = computed({
+  get: () => searchStore.customPattern,
+  set: (value) => { searchStore.customPattern = value }
+})
 
 const currentTemplate = computed(() => {
   return configStore.templates.find((t) => t.id === selectedTemplate.value)
