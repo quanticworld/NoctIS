@@ -53,10 +53,9 @@ const configStore = useConfigStore()
 const isOnline = ref(false)
 
 onMounted(async () => {
-  // Load config from localStorage
-  configStore.loadFromLocalStorage()
+  // localStorage already loaded in main.ts before app mount
 
-  // Load config from API
+  // Load config from API (templates)
   await configStore.loadConfig()
 
   // Check backend status

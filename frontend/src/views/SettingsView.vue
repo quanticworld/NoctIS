@@ -149,16 +149,26 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { useStatsStore } from '@/stores/stats'
 
 const configStore = useConfigStore()
 const statsStore = useStatsStore()
 
-const searchPath = ref(configStore.searchPath)
-const threads = ref(configStore.threads)
-const maxFilesize = ref(configStore.maxFilesize)
+// Use computed to always get latest values from store (includes localStorage)
+const searchPath = computed({
+  get: () => configStore.searchPath,
+  set: (value) => configStore.updateSearchPath(value)
+})
+const threads = computed({
+  get: () => configStore.threads,
+  set: (value) => configStore.updateThreads(value)
+})
+const maxFilesize = computed({
+  get: () => configStore.maxFilesize,
+  set: (value) => configStore.updateMaxFilesize(value)
+})
 const fileTypesInput = ref(configStore.fileTypes.join(', '))
 const excludeTypesInput = ref(configStore.excludeTypes.join(', '))
 const showSavedMessage = ref(false)
@@ -172,12 +182,9 @@ async function loadStats() {
 }
 
 function saveSettings() {
-  // Update all settings in the store
-  configStore.updateSearchPath(searchPath.value)
-  configStore.updateThreads(threads.value)
-  configStore.updateMaxFilesize(maxFilesize.value)
+  // searchPath, threads, maxFilesize are auto-saved via computed setters
 
-  // Parse file types from comma-separated input
+  // Parse and save file types from comma-separated input
   const fileTypes = fileTypesInput.value
     .split(',')
     .map(t => t.trim())
@@ -189,24 +196,6 @@ function saveSettings() {
     .map(t => t.trim())
     .filter(t => t.length > 0)
   configStore.updateExcludeTypes(excludeTypes)
-
-  // Debug: log what was saved
-  console.log('Settings saved:', {
-    searchPath: searchPath.value,
-    threads: threads.value,
-    maxFilesize: maxFilesize.value,
-    fileTypes,
-    excludeTypes,
-  })
-
-  // Verify localStorage
-  console.log('localStorage:', {
-    search_path: localStorage.getItem('noctis_search_path'),
-    threads: localStorage.getItem('noctis_threads'),
-    max_filesize: localStorage.getItem('noctis_max_filesize'),
-    file_types: localStorage.getItem('noctis_file_types'),
-    exclude_types: localStorage.getItem('noctis_exclude_types'),
-  })
 
   // Show visual confirmation
   showSavedMessage.value = true
@@ -229,10 +218,7 @@ function formatSize(bytes: number): string {
 }
 
 onMounted(() => {
-  // Sync with store values
-  searchPath.value = configStore.searchPath
-  threads.value = configStore.threads
-  maxFilesize.value = configStore.maxFilesize
+  // Initialize file types inputs from store
   fileTypesInput.value = configStore.fileTypes.join(', ')
   excludeTypesInput.value = configStore.excludeTypes.join(', ')
 })
