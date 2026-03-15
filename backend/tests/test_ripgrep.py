@@ -132,3 +132,26 @@ class TestRipgrepService:
         assert "--type=txt" in cmd
         assert "--type=log" in cmd
         assert "--type-not=pdf" in cmd
+
+    def test_build_rg_command_path_with_spaces(self):
+        """Test search path with spaces is handled correctly"""
+        request = SearchRequest(
+            template=RegexTemplate.EMAIL,
+            search_path="/home/user/My Documents/data",
+        )
+        pattern = RipgrepService.build_pattern(request)
+        cmd = RipgrepService.build_rg_command(pattern, request)
+
+        # Path should be in command as-is (no escaping needed with subprocess)
+        assert "/home/user/My Documents/data" in cmd
+
+    def test_build_rg_command_path_with_special_chars(self):
+        """Test search path with special characters"""
+        request = SearchRequest(
+            template=RegexTemplate.EMAIL,
+            search_path="/home/user/data-2024/files_v1.0",
+        )
+        pattern = RipgrepService.build_pattern(request)
+        cmd = RipgrepService.build_rg_command(pattern, request)
+
+        assert "/home/user/data-2024/files_v1.0" in cmd

@@ -15,10 +15,21 @@ export const useConfigStore = defineStore('config', () => {
       const response = await fetch('/api/v1/config')
       const data: Config = await response.json()
 
-      searchPath.value = data.search_path
-      threads.value = data.threads
-      maxFilesize.value = data.max_filesize
+      // Only load templates from API
+      // Don't override user settings (searchPath, threads, maxFilesize)
+      // as they are loaded from localStorage in main.ts
       templates.value = data.available_templates
+
+      // Set defaults only if not already set by localStorage
+      if (!localStorage.getItem('noctis_search_path')) {
+        searchPath.value = data.search_path
+      }
+      if (!localStorage.getItem('noctis_threads')) {
+        threads.value = data.threads
+      }
+      if (!localStorage.getItem('noctis_max_filesize')) {
+        maxFilesize.value = data.max_filesize
+      }
     } catch (error) {
       console.error('Failed to load config:', error)
     }

@@ -48,4 +48,49 @@ describe('Config Store', () => {
     expect(store.threads).toBe(12)
     expect(store.maxFilesize).toBe('200M')
   })
+
+  it('should handle path with spaces', () => {
+    const store = useConfigStore()
+    const pathWithSpaces = '/home/user/My Documents/OSINT Data'
+
+    store.updateSearchPath(pathWithSpaces)
+    expect(store.searchPath).toBe(pathWithSpaces)
+    expect(localStorage.getItem('noctis_search_path')).toBe(pathWithSpaces)
+
+    // Reload from localStorage
+    const store2 = useConfigStore()
+    store2.loadFromLocalStorage()
+    expect(store2.searchPath).toBe(pathWithSpaces)
+  })
+
+  it('should handle path with special characters', () => {
+    const store = useConfigStore()
+    const specialPath = '/home/user/data-2024/files_v1.0 (backup)'
+
+    store.updateSearchPath(specialPath)
+    expect(store.searchPath).toBe(specialPath)
+    expect(localStorage.getItem('noctis_search_path')).toBe(specialPath)
+  })
+
+  it('should handle file types with arrays', () => {
+    const store = useConfigStore()
+    const fileTypes = ['txt', 'log', 'json']
+    const excludeTypes = ['pdf', 'zip']
+
+    store.updateFileTypes(fileTypes)
+    store.updateExcludeTypes(excludeTypes)
+
+    expect(store.fileTypes).toEqual(fileTypes)
+    expect(store.excludeTypes).toEqual(excludeTypes)
+
+    // Check localStorage
+    expect(JSON.parse(localStorage.getItem('noctis_file_types')!)).toEqual(fileTypes)
+    expect(JSON.parse(localStorage.getItem('noctis_exclude_types')!)).toEqual(excludeTypes)
+
+    // Reload from localStorage
+    const store2 = useConfigStore()
+    store2.loadFromLocalStorage()
+    expect(store2.fileTypes).toEqual(fileTypes)
+    expect(store2.excludeTypes).toEqual(excludeTypes)
+  })
 })
