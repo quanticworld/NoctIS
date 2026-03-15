@@ -133,7 +133,6 @@ class RipgrepService:
         )
 
         try:
-
             # Read output line by line
             async for line in process.stdout:
                 try:
@@ -223,17 +222,36 @@ class RipgrepService:
             )
 
         except asyncio.CancelledError:
-            # Task was cancelled, kill the ripgrep process
+            # Task was cancelled, kill the ripgrep process immediately
             if process.returncode is None:
-                process.kill()
-                await process.wait()
+                try:
+                    process.kill()  # SIGKILL for immediate termination
+                    await asyncio.wait_for(process.wait(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    # Process didn't die, force kill
+                    import signal
+                    try:
+                        import os
+                        os.kill(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass  # Already dead
             raise
         finally:
-            # Ensure process is cleaned up
+            # Ensure process is cleaned up (belt and suspenders)
             if process.returncode is None:
-                process.terminate()
                 try:
-                    await asyncio.wait_for(process.wait(), timeout=2.0)
+                    process.terminate()  # Try graceful first
+                    await asyncio.wait_for(process.wait(), timeout=0.5)
                 except asyncio.TimeoutError:
+                    # Timeout, force kill
                     process.kill()
-                    await process.wait()
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        # Last resort: send SIGKILL directly
+                        import signal
+                        import os
+                        try:
+                            os.kill(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass  # Already dead
