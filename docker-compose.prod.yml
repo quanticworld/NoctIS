@@ -1,3 +1,5 @@
+version: '3.8'
+
 services:
   backend:
     build:
@@ -6,45 +8,39 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - /:/host:ro  # Mount root filesystem as read-only for full file access
-      - ./backend:/app
+      - /home/quantic/NoctIS/breaches:/mnt/osint:ro  # Mount OSINT data as read-only
     environment:
       - PYTHONUNBUFFERED=1
-      - TYPESENSE_API_KEY=noctis_dev_key_change_in_prod
+      - TYPESENSE_API_KEY=${TYPESENSE_API_KEY:-noctis_production_key_CHANGE_ME}
       - TYPESENSE_HOST=typesense
       - TYPESENSE_PORT=8108
       - TYPESENSE_PROTOCOL=http
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     depends_on:
       - typesense
+    restart: unless-stopped
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "5173:5173"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
+      - "80:5173"  # Expose on port 80 (requires sudo/root)
     environment:
-      - VITE_API_URL=http://backend:8000
-      - VITE_WS_URL=ws://backend:8000
+      - VITE_API_URL=http://noctis:8000
     command: npm run dev -- --host
     depends_on:
       - backend
+    restart: unless-stopped
 
   typesense:
     image: typesense/typesense:26.0
     ports:
       - "8108:8108"
     volumes:
-      - typesense-data:/data
+      - /home/quantic/NoctIS/data/typesense:/data  # Externalized volume for production
     command: >
       --data-dir /data
-      --api-key=noctis_dev_key_change_in_prod
+      --api-key=${TYPESENSE_API_KEY:-noctis_production_key_CHANGE_ME}
       --enable-cors
     restart: unless-stopped
-
-volumes:
-  typesense-data:

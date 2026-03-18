@@ -22,6 +22,14 @@ class Settings(BaseSettings):
     # WebSocket settings
     ws_heartbeat_interval: int = 30
 
+    # Typesense settings
+    typesense_api_key: str = "noctis_dev_key_change_in_prod"
+    typesense_host: str = "localhost"
+    typesense_port: int = 8108
+    typesense_protocol: str = "http"
+    typesense_connection_timeout: int = 5
+    typesense_batch_size: int = 10000  # Batch size for import operations
+
     class Config:
         env_file = ".env"
         case_sensitive = False

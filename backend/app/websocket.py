@@ -14,6 +14,8 @@ class ConnectionManager:
     def __init__(self):
         self.active_connections: Set[WebSocket] = set()
         self.search_tasks: Dict[WebSocket, asyncio.Task] = {}
+        self.cancel_events: Dict[WebSocket, asyncio.Event] = {}
+        self.process_pids: Dict[WebSocket, int] = {}
 
     async def connect(self, websocket: WebSocket):
         """Accept and register a new WebSocket connection"""
@@ -29,6 +31,11 @@ class ConnectionManager:
             if not task.done():
                 task.cancel()
             del self.search_tasks[websocket]
+        # Clean up cancel event and PID
+        if websocket in self.cancel_events:
+            del self.cancel_events[websocket]
+        if websocket in self.process_pids:
+            del self.process_pids[websocket]
 
     async def send_message(self, websocket: WebSocket, message: dict):
         """Send a message to a specific connection"""
@@ -44,9 +51,13 @@ class ConnectionManager:
         total_matches = 0
         files_scanned = 0
 
+        # Create cancel event for this search
+        cancel_event = asyncio.Event()
+        self.cancel_events[websocket] = cancel_event
+
         try:
             # Execute search and stream results
-            async for update in RipgrepService.execute_search(request):
+            async for update in RipgrepService.execute_search(request, cancel_event, websocket, self):
                 # Send update to client
                 await self.send_message(websocket, update.model_dump())
 
@@ -109,15 +120,43 @@ async def websocket_endpoint(websocket: WebSocket):
                     await manager.send_message(websocket, error.model_dump())
 
             elif action == "cancel":
-                # Cancel ongoing search
+                # Cancel ongoing search - KILL THE PROCESS IMMEDIATELY
+                print(f"[CANCEL] Received cancel request")
+
+                # Kill the ripgrep process directly
+                if websocket in manager.process_pids:
+                    pid = manager.process_pids[websocket]
+                    print(f"[CANCEL] Killing ripgrep process {pid}")
+                    import signal
+                    import os
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                        print(f"[CANCEL] Sent SIGKILL to process {pid}")
+                    except ProcessLookupError:
+                        print(f"[CANCEL] Process {pid} already dead")
+                    except Exception as e:
+                        print(f"[CANCEL] Error killing process {pid}: {e}")
+
+                # Signal cancel event
+                if websocket in manager.cancel_events:
+                    print(f"[CANCEL] Setting cancel event")
+                    manager.cancel_events[websocket].set()
+
+                # Cancel the task
                 if websocket in manager.search_tasks:
                     task = manager.search_tasks[websocket]
+                    print(f"[CANCEL] Task found, done={task.done()}")
                     if not task.done():
+                        print(f"[CANCEL] Calling task.cancel()")
                         task.cancel()
                         try:
                             await task
+                            print(f"[CANCEL] Task awaited successfully")
                         except asyncio.CancelledError:
+                            print(f"[CANCEL] CancelledError caught")
                             pass
+                else:
+                    print(f"[CANCEL] No task found for this websocket")
 
             elif action == "ping":
                 # Heartbeat

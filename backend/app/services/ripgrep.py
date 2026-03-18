@@ -102,9 +102,16 @@ class RipgrepService:
     @staticmethod
     async def execute_search(
         request: SearchRequest,
+        cancel_event: asyncio.Event = None,
+        websocket = None,
+        manager = None,
     ) -> AsyncGenerator[SearchProgress | SearchResult, None]:
         """
         Execute ripgrep search and yield progress/results in real-time
+
+        Args:
+            request: Search parameters
+            cancel_event: Optional event to signal cancellation
         """
         pattern = RipgrepService.build_pattern(request)
         cmd = RipgrepService.build_rg_command(pattern, request)
@@ -134,10 +141,29 @@ class RipgrepService:
             stderr=asyncio.subprocess.PIPE,
         )
 
+        # Store process PID in manager so it can be killed on cancel
+        if manager and websocket:
+            manager.process_pids[websocket] = process.pid
+            print(f"[RIPGREP] Started process {process.pid}, stored in manager")
+
         try:
             # Read output line by line
             lines_processed = 0
             async for line in process.stdout:
+                # Check if cancel was requested
+                if cancel_event and cancel_event.is_set():
+                    print(f"[RIPGREP] Cancel event detected! Killing process {process.pid}")
+                    if process.returncode is None:
+                        import signal
+                        import os
+                        try:
+                            os.kill(process.pid, signal.SIGKILL)
+                            print(f"[RIPGREP] Sent SIGKILL to process {process.pid}")
+                        except ProcessLookupError:
+                            print(f"[RIPGREP] Process {process.pid} already dead")
+                            pass
+                    break
+
                 lines_processed += 1
 
                 try:
@@ -219,7 +245,18 @@ class RipgrepService:
                     # Skip invalid JSON lines
                     continue
 
-            # Wait for process to complete
+            # Wait for process to complete (or kill if cancel was requested)
+            if cancel_event and cancel_event.is_set():
+                print(f"[RIPGREP] Cancel event set after loop, killing process {process.pid}")
+                if process.returncode is None:
+                    import signal
+                    import os
+                    try:
+                        os.kill(process.pid, signal.SIGKILL)
+                        print(f"[RIPGREP] Sent SIGKILL to process {process.pid}")
+                    except ProcessLookupError:
+                        pass
+
             await process.wait()
 
             # Send final progress
@@ -237,20 +274,31 @@ class RipgrepService:
 
         except asyncio.CancelledError:
             # Task was cancelled, kill the ripgrep process immediately
+            print(f"[RIPGREP] CancelledError caught! Process PID: {process.pid}, returncode: {process.returncode}")
             if process.returncode is None:
                 try:
+                    print(f"[RIPGREP] Killing process {process.pid}")
                     process.kill()  # SIGKILL for immediate termination
                     await asyncio.wait_for(process.wait(), timeout=1.0)
+                    print(f"[RIPGREP] Process {process.pid} killed successfully")
                 except asyncio.TimeoutError:
                     # Process didn't die, force kill
+                    print(f"[RIPGREP] Timeout, force killing {process.pid}")
                     import signal
                     try:
                         import os
                         os.kill(process.pid, signal.SIGKILL)
+                        print(f"[RIPGREP] Force killed {process.pid}")
                     except ProcessLookupError:
+                        print(f"[RIPGREP] Process {process.pid} already dead")
                         pass  # Already dead
             raise
         finally:
+            # Clean up PID from manager
+            if manager and websocket and websocket in manager.process_pids:
+                del manager.process_pids[websocket]
+                print(f"[RIPGREP] Removed PID {process.pid} from manager")
+
             # Ensure process is cleaned up (belt and suspenders)
             if process.returncode is None:
                 try:

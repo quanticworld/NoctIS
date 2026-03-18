@@ -15,11 +15,39 @@
           <!-- Navigation Links -->
           <div class="flex space-x-1">
             <RouterLink
-              to="/"
+              to="/explorer"
+              class="nav-link"
+              :class="{ 'nav-link-active': $route.name === 'explorer' }"
+            >
+              EXPLORER
+            </RouterLink>
+            <RouterLink
+              to="/search"
               class="nav-link"
               :class="{ 'nav-link-active': $route.name === 'search' }"
             >
               SEARCH
+            </RouterLink>
+            <RouterLink
+              to="/import"
+              class="nav-link"
+              :class="{ 'nav-link-active': $route.name === 'import' }"
+            >
+              IMPORT
+            </RouterLink>
+            <RouterLink
+              to="/mdm"
+              class="nav-link"
+              :class="{ 'nav-link-active': $route.name === 'mdm' }"
+            >
+              MDM
+            </RouterLink>
+            <RouterLink
+              to="/analytics"
+              class="nav-link"
+              :class="{ 'nav-link-active': $route.name === 'analytics' }"
+            >
+              ANALYTICS
             </RouterLink>
             <RouterLink
               to="/settings"

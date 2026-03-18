@@ -16,6 +16,83 @@
       </div>
     </div>
 
+    <!-- File Browser Modal -->
+    <div v-if="showBrowser" class="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50" @click.self="showBrowser = false">
+      <div class="bg-dark-100 border border-red-team-500 max-w-4xl w-full mx-4 max-h-[80vh] flex flex-col">
+        <!-- Modal Header -->
+        <div class="flex items-center justify-between p-4 border-b border-gray-700">
+          <h3 class="text-lg font-bold text-red-team-500 uppercase tracking-wide">
+            {{ searchMode === 'file' ? 'SELECT FILE' : 'SELECT DIRECTORY' }}
+          </h3>
+          <button @click="showBrowser = false" class="text-gray-400 hover:text-gray-100">
+            <span class="text-2xl">×</span>
+          </button>
+        </div>
+
+        <!-- Current Path -->
+        <div class="p-4 border-b border-gray-700">
+          <div class="flex items-center gap-2">
+            <span class="text-sm text-gray-400">PATH:</span>
+            <span class="text-sm text-gray-100 font-mono">{{ browsePath }}</span>
+          </div>
+        </div>
+
+        <!-- File List -->
+        <div class="flex-1 overflow-y-auto p-4">
+          <div v-if="browseLoading" class="text-center text-gray-400 py-8">
+            Loading...
+          </div>
+          <div v-else-if="browseError" class="text-center text-red-team-500 py-8">
+            {{ browseError }}
+          </div>
+          <div v-else class="space-y-1">
+            <!-- Parent Directory -->
+            <div
+              v-if="browseParentPath"
+              @click="navigateTo(browseParentPath)"
+              class="flex items-center gap-3 p-2 hover:bg-dark-200 cursor-pointer border border-transparent hover:border-red-team-500 transition-colors"
+            >
+              <span class="text-red-team-500">📁</span>
+              <span class="text-gray-300">..</span>
+            </div>
+
+            <!-- Directory/File Items -->
+            <div
+              v-for="item in browseItems"
+              :key="item.path"
+              @click="selectItem(item)"
+              class="flex items-center gap-3 p-2 hover:bg-dark-200 cursor-pointer border border-transparent hover:border-red-team-500 transition-colors"
+            >
+              <span class="text-red-team-500">{{ item.is_directory ? '📁' : '📄' }}</span>
+              <span class="flex-1 text-gray-300 truncate">{{ item.name }}</span>
+              <span v-if="!item.is_directory" class="text-xs text-gray-500">
+                {{ formatSize(item.size) }}
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Modal Footer -->
+        <div class="p-4 border-t border-gray-700 flex justify-between items-center">
+          <div class="text-sm text-gray-400">
+            {{ browseItems.length }} items
+          </div>
+          <div class="flex gap-2">
+            <button @click="showBrowser = false" class="btn-secondary">
+              CANCEL
+            </button>
+            <button
+              v-if="searchMode === 'directory'"
+              @click="selectCurrentDirectory"
+              class="btn-primary"
+            >
+              SELECT THIS DIRECTORY
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Search Configuration -->
     <div class="card p-6 mb-6">
       <h2 class="text-lg font-bold text-red-team-500 mb-4 uppercase tracking-wide">Search Parameters</h2>
@@ -28,6 +105,40 @@
             {{ template.name }} - {{ template.description }}
           </option>
         </select>
+      </div>
+
+      <!-- Search Target Selection -->
+      <div class="input-group">
+        <label class="label">Search Target</label>
+        <div class="flex gap-3">
+          <div class="flex items-center gap-2">
+            <input type="radio" id="mode-dir" value="directory" v-model="searchMode" class="w-4 h-4" />
+            <label for="mode-dir" class="text-sm text-gray-300 cursor-pointer">Directory</label>
+          </div>
+          <div class="flex items-center gap-2">
+            <input type="radio" id="mode-file" value="file" v-model="searchMode" class="w-4 h-4" />
+            <label for="mode-file" class="text-sm text-gray-300 cursor-pointer">Single File</label>
+          </div>
+        </div>
+      </div>
+
+      <!-- Path Input -->
+      <div class="input-group">
+        <label class="label">{{ searchMode === 'file' ? 'File Path' : 'Directory Path' }}</label>
+        <div class="flex gap-2">
+          <input
+            v-model="searchPath"
+            type="text"
+            :placeholder="searchMode === 'file' ? '/home/quantic/tmp/France 01.txt' : '/home/quantic/tmp'"
+            class="flex-1"
+          />
+          <button @click="browseFiles" class="btn-secondary whitespace-nowrap">
+            BROWSE
+          </button>
+        </div>
+        <div class="text-xs text-gray-500 mt-1">
+          {{ searchMode === 'file' ? 'Specify exact file path to search within a single file' : 'Specify directory to search recursively' }}
+        </div>
       </div>
 
       <!-- Dynamic Fields -->
@@ -165,7 +276,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useConfigStore } from '@/stores/config'
 import { useSearchStore } from '@/stores/search'
 import { useStatsStore } from '@/stores/stats'
@@ -174,6 +285,18 @@ import type { SearchMatch } from '@/types'
 const configStore = useConfigStore()
 const searchStore = useSearchStore()
 const statsStore = useStatsStore()
+
+// Search target configuration
+const searchMode = ref<'directory' | 'file'>('directory')
+const searchPath = ref('/home/quantic/tmp')
+
+// File browser state
+const showBrowser = ref(false)
+const browseLoading = ref(false)
+const browseError = ref<string | null>(null)
+const browsePath = ref('/home/quantic/tmp')
+const browseParentPath = ref<string | null>(null)
+const browseItems = ref<any[]>([])
 
 // Use store refs for form state (persists across navigation)
 const selectedTemplate = computed({
@@ -223,7 +346,7 @@ const canSearch = computed(() => {
 async function startSearch() {
   const request: any = {
     template: selectedTemplate.value,
-    search_path: configStore.searchPath,
+    search_path: searchPath.value,
     threads: configStore.threads,
     max_filesize: configStore.maxFilesize,
     case_insensitive: true,
@@ -245,6 +368,71 @@ async function startSearch() {
   }
 
   await searchStore.startSearch(request)
+}
+
+async function browseFiles() {
+  // Initialize browse path from current search path
+  browsePath.value = searchPath.value
+  showBrowser.value = true
+  await loadBrowseData(browsePath.value)
+}
+
+async function loadBrowseData(path: string) {
+  browseLoading.value = true
+  browseError.value = null
+
+  try {
+    const response = await fetch(`/api/v1/files/browse?path=${encodeURIComponent(path)}&mode=${searchMode.value}`)
+
+    if (!response.ok) {
+      throw new Error('Failed to browse files')
+    }
+
+    const data = await response.json()
+    browsePath.value = data.current_path
+    browseParentPath.value = data.parent_path
+    browseItems.value = data.items
+
+  } catch (error) {
+    browseError.value = error instanceof Error ? error.message : 'Failed to browse files'
+    console.error('Browse failed:', error)
+  } finally {
+    browseLoading.value = false
+  }
+}
+
+async function navigateTo(path: string) {
+  await loadBrowseData(path)
+}
+
+function selectItem(item: any) {
+  if (searchMode.value === 'directory' && item.is_directory) {
+    // Navigate into directory
+    navigateTo(item.path)
+  } else if (searchMode.value === 'file' && !item.is_directory) {
+    // Select file
+    searchPath.value = item.path
+    showBrowser.value = false
+  } else if (searchMode.value === 'directory' && !item.is_directory) {
+    // In directory mode, clicking a file does nothing (or could show a message)
+    return
+  } else {
+    // In file mode, clicking a directory navigates into it
+    navigateTo(item.path)
+  }
+}
+
+function selectCurrentDirectory() {
+  searchPath.value = browsePath.value
+  showBrowser.value = false
+}
+
+function formatSize(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return Math.round((bytes / Math.pow(k, i)) * 100) / 100 + ' ' + sizes[i]
 }
 
 function highlightMatch(match: SearchMatch): string {

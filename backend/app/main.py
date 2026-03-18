@@ -1,16 +1,41 @@
 """FastAPI main application"""
 from fastapi import FastAPI, WebSocket, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from .config import settings
 from .models import StatsRequest, StatsResponse, ConfigResponse, RegexTemplate
 from .services.stats import StatsService
+from .services.typesense_service import typesense_service
 from .websocket import websocket_endpoint
+from .routers import files, search, import_router, mdm
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan events"""
+    # Startup
+    logger.info("Initializing Typesense collections...")
+    try:
+        results = await typesense_service.initialize_collections()
+        logger.info(f"Typesense collections initialized: {results}")
+    except Exception as e:
+        logger.error(f"Failed to initialize Typesense: {e}")
+
+    yield
+
+    # Shutdown
+    logger.info("Shutting down...")
+
 
 # Create FastAPI app
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
-    description="OSINT Red Team Toolbox - Professional search interface",
+    description="OSINT Red Team Toolbox - Professional search interface with Typesense indexing",
+    lifespan=lifespan
 )
 
 # Configure CORS
@@ -21,6 +46,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include routers
+app.include_router(files.router, prefix=settings.api_prefix)
+app.include_router(search.router, prefix=settings.api_prefix)
+app.include_router(import_router.router, prefix=settings.api_prefix)
+app.include_router(mdm.router, prefix=settings.api_prefix)
 
 
 @app.get("/")
