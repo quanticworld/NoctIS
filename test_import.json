@@ -1,0 +1,8 @@
+{
+  "documents": [
+    {"email": "alice@example.com", "first_name": "Alice", "city": "Paris"},
+    {"email": "bob@example.com", "first_name": "Bob", "city": "London"}
+  ],
+  "breach_name": "TestAPI",
+  "source_file": "api_test.json"
+}

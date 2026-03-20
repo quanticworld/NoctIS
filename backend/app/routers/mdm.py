@@ -4,9 +4,14 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from app.services.mdm_service import mdm_service
 import logging
+import json
+from pathlib import Path
 
 router = APIRouter(prefix="/mdm", tags=["mdm"])
 logger = logging.getLogger(__name__)
+
+# Configuration file for correlation rules
+RULES_CONFIG_PATH = Path("/app/data/correlation_rules.json")
 
 
 class MasterRecord(BaseModel):
@@ -55,6 +60,33 @@ class DeduplicationStats(BaseModel):
     new_masters: int
     merged: int
     errors: int
+    has_more: bool = False
+
+
+class ResolveConflictRequest(BaseModel):
+    """Request to resolve a conflict"""
+    conflict_id: str
+    chosen_value: str
+    resolved_by: str = Field("manual", description="Who resolved")
+
+
+class ImportToSilverRequest(BaseModel):
+    """Request to import documents to silver layer"""
+    documents: List[Dict[str, Any]] = Field(..., description="List of documents to import")
+    breach_name: str = Field(..., description="Name of the breach/source")
+    source_file: str = Field(..., description="Source file path or identifier")
+
+
+class CorrelationRule(BaseModel):
+    """Correlation rule definition"""
+    name: str
+    confidence: float = Field(..., ge=0, le=100)
+    keys: List[str] = Field(..., min_items=1)
+
+
+class CorrelationRulesRequest(BaseModel):
+    """Request to update correlation rules"""
+    rules: List[CorrelationRule]
 
 
 @router.get("/masters", response_model=List[MasterRecord])
@@ -62,13 +94,15 @@ async def list_masters(
     status: Optional[str] = Query(None, description="Filter by status (silver/golden)"),
     min_confidence: Optional[float] = Query(None, ge=0, le=100, description="Minimum confidence score"),
     min_sources: Optional[int] = Query(None, ge=1, description="Minimum source count"),
+    breaches: Optional[str] = Query(None, description="Comma-separated breach names (AND logic - must be in ALL)"),
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=250)
 ):
     """
     List master records with filtering
 
-    Returns paginated list of master records
+    Returns paginated list of master records.
+    When multiple breaches are specified, returns masters found in ALL breaches (AND logic).
     """
     try:
         # Build filter
@@ -79,6 +113,17 @@ async def list_masters(
             filters.append(f"confidence_score:>={min_confidence}")
         if min_sources is not None:
             filters.append(f"source_count:>={min_sources}")
+
+        # Handle breach filtering with AND logic
+        if breaches:
+            breach_list = [b.strip() for b in breaches.split(',')]
+            # For AND logic, we need masters that contain ALL specified breaches
+            # Typesense array filters: breach_names:=[value] checks if value exists in array
+            for breach in breach_list:
+                escaped_breach = breach.replace(':', '\\:')
+                filters.append(f"breach_names:=[{escaped_breach}]")
+            # Also require source_count >= number of breaches
+            filters.append(f"source_count:>={len(breach_list)}")
 
         filter_query = ' && '.join(filters) if filters else None
 
@@ -96,7 +141,12 @@ async def list_masters(
 
         results = mdm_service.client.collections['master_records'].documents.search(search_params)
 
-        return results['hits']
+        # Extract documents from Typesense hits structure
+        # Typesense returns {'hits': [{'document': {...}}, ...]}
+        # We need to extract just the documents
+        documents = [hit['document'] for hit in results['hits']]
+
+        return documents
 
     except Exception as e:
         logger.error(f"Failed to list masters: {e}")
@@ -123,15 +173,17 @@ async def get_master(master_id: str):
 
 @router.post("/deduplicate", response_model=DeduplicationStats)
 async def run_deduplication(
-    batch_size: int = Query(100, ge=10, le=1000, description="Batch size")
+    batch_size: int = Query(100, ge=10, le=250, description="Records per batch (max 250)"),
+    max_batches: Optional[int] = Query(None, ge=1, description="Max batches to process (None = all)")
 ):
     """
     Run deduplication process on silver records
 
-    Processes unlinked silver records and creates/merges masters
+    Processes unlinked silver records and creates/merges masters.
+    Set max_batches to limit processing (useful for large datasets).
     """
     try:
-        stats = await mdm_service.process_silver_deduplication(batch_size)
+        stats = await mdm_service.process_silver_deduplication(batch_size, max_batches)
         return stats
     except Exception as e:
         logger.error(f"Deduplication failed: {e}")
@@ -271,6 +323,32 @@ async def promote_to_golden(master_id: str, request: PromoteRequest):
         raise HTTPException(status_code=404, detail="Master not found")
 
 
+@router.post("/masters/{master_id}/demote")
+async def demote_from_golden(master_id: str):
+    """
+    Demote a master record from golden to silver status
+
+    Removes golden validation status
+    """
+    try:
+        master = mdm_service.client.collections['master_records'].documents[master_id].retrieve()
+
+        import time
+        updates = {
+            'status': 'silver',
+            'validated_by': None,
+            'updated_at': int(time.time())
+        }
+
+        mdm_service.client.collections['master_records'].documents[master_id].update(updates)
+
+        return {'status': 'success', 'master_id': master_id}
+
+    except Exception as e:
+        logger.error(f"Demote failed: {e}")
+        raise HTTPException(status_code=404, detail="Master not found")
+
+
 @router.post("/masters/{master_id}/split")
 async def split_master(master_id: str, request: SplitRequest):
     """
@@ -339,6 +417,273 @@ async def split_master(master_id: str, request: SplitRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/correlation-rules")
+async def get_correlation_rules():
+    """
+    Get current correlation rules configuration
+
+    Returns the matching strategies used for deduplication
+    """
+    try:
+        # Try to load from file first
+        if RULES_CONFIG_PATH.exists():
+            with open(RULES_CONFIG_PATH, 'r') as f:
+                config = json.load(f)
+                return config
+
+        # Fall back to hardcoded defaults from mdm_service
+        default_rules = {
+            'rules': [
+                {'name': name, 'confidence': strategy['confidence'], 'keys': strategy['keys']}
+                for name, strategy in mdm_service.MATCH_STRATEGIES.items()
+            ]
+        }
+        return default_rules
+
+    except Exception as e:
+        logger.error(f"Failed to get correlation rules: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/correlation-rules")
+async def update_correlation_rules(request: CorrelationRulesRequest):
+    """
+    Update correlation rules configuration
+
+    Saves new matching strategies to be used in deduplication
+    """
+    try:
+        # Validate rules
+        if not request.rules:
+            raise HTTPException(status_code=400, detail="At least one rule is required")
+
+        # Convert to mdm_service format
+        new_strategies = {}
+        for rule in request.rules:
+            new_strategies[rule.name] = {
+                'confidence': rule.confidence,
+                'keys': rule.keys
+            }
+
+        # Save to file
+        RULES_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(RULES_CONFIG_PATH, 'w') as f:
+            json.dump({'rules': [r.model_dump() for r in request.rules]}, f, indent=2)
+
+        # Update mdm_service MATCH_STRATEGIES
+        mdm_service.MATCH_STRATEGIES = new_strategies
+
+        logger.info(f"Updated correlation rules: {len(request.rules)} rules")
+
+        return {
+            'status': 'success',
+            'rules_count': len(request.rules)
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update correlation rules: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/breaches")
+async def get_breaches():
+    """
+    Get list of unique breach names from silver records
+
+    Returns list of breach names with count of records per breach
+    """
+    try:
+        # Typesense doesn't have a direct aggregation API, so we'll do a faceted search
+        # Get all unique breach names by fetching facet counts
+        results = mdm_service.client.collections['silver_records'].documents.search({
+            'q': '*',
+            'facet_by': 'breach_name',
+            'per_page': 0,
+            'max_facet_values': 1000  # Support up to 1000 different breaches
+        })
+
+        # Extract facet counts
+        breaches = []
+        if 'facet_counts' in results:
+            for facet in results['facet_counts']:
+                if facet['field_name'] == 'breach_name':
+                    for count in facet['counts']:
+                        breaches.append({
+                            'name': count['value'],
+                            'count': count['count']
+                        })
+                    break
+
+        # Sort by count descending
+        breaches.sort(key=lambda x: x['count'], reverse=True)
+
+        return breaches
+
+    except Exception as e:
+        logger.error(f"Failed to get breaches: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/breaches/{breach_name}")
+async def delete_breach(breach_name: str):
+    """
+    Delete all data from a specific breach
+
+    - Deletes all silver records from this breach
+    - Removes breach from masters' breach_names array
+    - Deletes masters that only had this breach (orphaned masters)
+    - Updates source_count for remaining masters
+    """
+    try:
+        deleted_silver = 0
+        deleted_masters = 0
+        updated_masters = 0
+
+        # Step 1: Find all silver records for this breach
+        logger.info(f"Finding silver records for breach: {breach_name}")
+        silver_results = mdm_service.client.collections['silver_records'].documents.search({
+            'q': '*',
+            'filter_by': f'breach_name:={breach_name}',
+            'per_page': 250
+        })
+
+        total_silver = silver_results['found']
+        logger.info(f"Found {total_silver} silver records for {breach_name}")
+
+        # Step 2: Get all master_ids from these silver records
+        master_ids_to_check = set()
+
+        # Fetch all silver records (paginated)
+        page = 1
+        while True:
+            results = mdm_service.client.collections['silver_records'].documents.search({
+                'q': '*',
+                'filter_by': f'breach_name:={breach_name}',
+                'per_page': 250,
+                'page': page
+            })
+
+            if not results['hits']:
+                break
+
+            for hit in results['hits']:
+                silver_doc = hit['document']
+                if silver_doc.get('master_id'):
+                    master_ids_to_check.add(silver_doc['master_id'])
+
+            page += 1
+            if page > results.get('out_of', page) / 250:
+                break
+
+        logger.info(f"Found {len(master_ids_to_check)} masters to check")
+
+        # Step 3: Delete all silver records from this breach
+        logger.info(f"Deleting silver records for {breach_name}")
+        try:
+            mdm_service.client.collections['silver_records'].documents.delete({
+                'filter_by': f'breach_name:={breach_name}'
+            })
+            deleted_silver = total_silver
+        except Exception as e:
+            logger.error(f"Failed to delete silver records: {e}")
+
+        # Step 4: Update or delete affected masters
+        logger.info(f"Updating/deleting affected masters")
+        for master_id in master_ids_to_check:
+            try:
+                master = mdm_service.client.collections['master_records'].documents[master_id].retrieve()
+                breach_names = master.get('breach_names', [])
+
+                # Remove this breach from the list
+                if breach_name in breach_names:
+                    breach_names.remove(breach_name)
+
+                # If no breaches left, delete the master
+                if not breach_names:
+                    mdm_service.client.collections['master_records'].documents[master_id].delete()
+                    deleted_masters += 1
+                else:
+                    # Update master: remove breach, update source_count
+                    # Recalculate source_count by counting remaining silver records
+                    silver_ids = master.get('silver_ids', [])
+                    remaining_silver = []
+
+                    for silver_id in silver_ids:
+                        try:
+                            silver = mdm_service.client.collections['silver_records'].documents[silver_id].retrieve()
+                            if silver.get('breach_name') != breach_name:
+                                remaining_silver.append(silver_id)
+                        except:
+                            # Silver was deleted or doesn't exist
+                            pass
+
+                    import time
+                    mdm_service.client.collections['master_records'].documents[master_id].update({
+                        'breach_names': breach_names,
+                        'silver_ids': remaining_silver,
+                        'source_count': len(remaining_silver),
+                        'updated_at': int(time.time())
+                    })
+                    updated_masters += 1
+
+            except Exception as e:
+                logger.error(f"Error processing master {master_id}: {e}")
+
+        return {
+            'status': 'success',
+            'message': f'Breach "{breach_name}" deleted',
+            'deleted_silver': deleted_silver,
+            'deleted_masters': deleted_masters,
+            'updated_masters': updated_masters
+        }
+
+    except Exception as e:
+        logger.error(f"Delete breach failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/clear-all")
+async def clear_all_data():
+    """
+    Delete ALL data from silver and master collections
+
+    WARNING: This is destructive and cannot be undone!
+    """
+    try:
+        # Delete all silver records
+        try:
+            mdm_service.client.collections['silver_records'].documents.delete({'filter_by': 'id:!=null'})
+            logger.info("Deleted all silver records")
+        except Exception as e:
+            logger.error(f"Failed to delete silver records: {e}")
+
+        # Delete all master records
+        try:
+            mdm_service.client.collections['master_records'].documents.delete({'filter_by': 'id:!=null'})
+            logger.info("Deleted all master records")
+        except Exception as e:
+            logger.error(f"Failed to delete master records: {e}")
+
+        # Get final counts
+        silver_stats = mdm_service.client.collections['silver_records'].retrieve()
+        master_stats = mdm_service.client.collections['master_records'].retrieve()
+
+        return {
+            'status': 'success',
+            'message': 'All data cleared',
+            'remaining': {
+                'silver': silver_stats.get('num_documents', 0),
+                'master': master_stats.get('num_documents', 0)
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Clear all failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/stats")
 async def get_mdm_stats():
     """
@@ -394,4 +739,102 @@ async def get_mdm_stats():
 
     except Exception as e:
         logger.error(f"Failed to get stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/import")
+async def import_to_silver(request: ImportToSilverRequest):
+    """
+    Import documents to silver layer (raw data)
+
+    This endpoint allows you to import documents directly without using the UI.
+    The documents will be stored in the silver_records collection and can then
+    be processed through deduplication to create master records.
+
+    Example:
+        POST /api/v1/mdm/import
+        {
+            "documents": [
+                {"email": "test@example.com", "first_name": "John", "last_name": "Doe"},
+                {"phone": "1234567890", "first_name": "Jane", "city": "Paris"}
+            ],
+            "breach_name": "TestBreach",
+            "source_file": "manual_import.json"
+        }
+    """
+    try:
+        result = await mdm_service.import_to_silver(
+            documents=request.documents,
+            breach_name=request.breach_name,
+            source_file=request.source_file
+        )
+
+        return {
+            'status': 'success',
+            'imported': result.get('imported', 0),
+            'failed': result.get('failed', 0),
+            'breach_name': request.breach_name
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to import to silver: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/conflicts")
+async def get_conflicts(
+    master_id: Optional[str] = Query(None, description="Filter by master ID"),
+    status: str = Query("pending", description="Filter by status (pending/resolved/ignored)"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200)
+):
+    """
+    Get conflicts for manual resolution
+
+    Returns conflicts grouped by master record, showing field-level
+    differences between sources that need user decision.
+    """
+    try:
+        conflicts = await mdm_service.get_conflicts(
+            master_id=master_id,
+            status=status,
+            page=page,
+            per_page=per_page
+        )
+        return conflicts
+
+    except Exception as e:
+        logger.error(f"Failed to get conflicts: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/conflicts/resolve")
+async def resolve_conflict(request: ResolveConflictRequest):
+    """
+    Resolve a conflict by choosing which value to keep
+
+    The chosen_value should be either the existing_value or new_value
+    from the conflict record. This will update the master record and
+    mark the conflict as resolved.
+    """
+    try:
+        success = await mdm_service.resolve_conflict(
+            conflict_id=request.conflict_id,
+            chosen_value=request.chosen_value,
+            resolved_by=request.resolved_by
+        )
+
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to resolve conflict")
+
+        return {
+            'status': 'success',
+            'message': 'Conflict resolved successfully',
+            'conflict_id': request.conflict_id
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to resolve conflict: {e}")
         raise HTTPException(status_code=500, detail=str(e))

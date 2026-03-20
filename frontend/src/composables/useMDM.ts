@@ -19,6 +19,11 @@ export interface MasterRecord {
   first_name?: string
   last_name?: string
   gender?: string
+  birth_date?: string
+  city?: string
+  country?: string
+  company?: string
+  passwords?: string[]
   breach_names: string[]
   created_at: number
   updated_at: number
@@ -33,6 +38,7 @@ export interface SilverRecord {
   full_name?: string
   first_name?: string
   last_name?: string
+  password?: string
   breach_name: string
   source_file: string
   imported_at: number
@@ -56,17 +62,24 @@ export interface MDMStats {
   }
 }
 
+export interface Breach {
+  name: string
+  count: number
+}
+
 export interface DeduplicationStats {
   processed: number
   new_masters: number
   merged: number
   errors: number
+  has_more?: boolean
 }
 
 export function useMDM() {
   const masters: Ref<MasterRecord[]> = ref([])
   const currentMaster: Ref<MasterWithSources | null> = ref(null)
   const stats: Ref<MDMStats | null> = ref(null)
+  const breaches: Ref<Breach[]> = ref([])
   const loading = ref(false)
   const error: Ref<string | null> = ref(null)
 
@@ -74,6 +87,7 @@ export function useMDM() {
   const statusFilter: Ref<'all' | 'silver' | 'golden'> = ref('all')
   const minConfidence = ref(0)
   const minSources = ref(1)
+  const selectedBreaches: Ref<string[]> = ref([])
 
   const filteredMasters = computed(() => {
     let filtered = masters.value
@@ -112,6 +126,9 @@ export function useMDM() {
       if (minSources.value > 1) {
         params.append('min_sources', String(minSources.value))
       }
+      if (selectedBreaches.value.length > 0) {
+        params.append('breaches', selectedBreaches.value.join(','))
+      }
 
       const response = await fetch(`${API_BASE}/api/v1/mdm/masters?${params}`)
 
@@ -125,6 +142,27 @@ export function useMDM() {
     } catch (err) {
       error.value = err instanceof Error ? err.message : 'Unknown error'
       console.error('Failed to fetch masters:', err)
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function fetchBreaches() {
+    loading.value = true
+    error.value = null
+
+    try {
+      const response = await fetch(`${API_BASE}/api/v1/mdm/breaches`)
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch breaches: ${response.statusText}`)
+      }
+
+      breaches.value = await response.json()
+
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'Unknown error'
+      console.error('Failed to fetch breaches:', err)
     } finally {
       loading.value = false
     }
@@ -272,6 +310,39 @@ export function useMDM() {
     }
   }
 
+  async function demoteFromGolden(masterId: string): Promise<boolean> {
+    loading.value = true
+    error.value = null
+
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/v1/mdm/masters/${masterId}/demote`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' }
+        }
+      )
+
+      if (!response.ok) {
+        throw new Error('Demote failed')
+      }
+
+      // Refresh current master if loaded
+      if (currentMaster.value?.master.id === masterId) {
+        await fetchMaster(masterId)
+      }
+
+      return true
+
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'Unknown error'
+      console.error('Demote failed:', err)
+      return false
+    } finally {
+      loading.value = false
+    }
+  }
+
   async function splitMaster(
     masterId: string,
     silverIds: string[]
@@ -310,6 +381,66 @@ export function useMDM() {
     }
   }
 
+  async function deleteBreach(breachName: string): Promise<any> {
+    loading.value = true
+    error.value = null
+
+    try {
+      const response = await fetch(`${API_BASE}/api/v1/mdm/breaches/${encodeURIComponent(breachName)}`, {
+        method: 'DELETE'
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to delete breach')
+      }
+
+      const result = await response.json()
+      console.log('Delete breach result:', result)
+
+      // Refresh stats and breaches
+      await Promise.all([fetchStats(), fetchBreaches()])
+
+      return result
+
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'Unknown error'
+      console.error('Delete breach failed:', err)
+      return null
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function clearAllData(): Promise<boolean> {
+    loading.value = true
+    error.value = null
+
+    try {
+      const response = await fetch(`${API_BASE}/api/v1/mdm/clear-all`, {
+        method: 'DELETE'
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to clear data')
+      }
+
+      const result = await response.json()
+      console.log('Clear result:', result)
+
+      // Refresh stats
+      await fetchStats()
+
+      return true
+
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : 'Unknown error'
+      console.error('Clear all failed:', err)
+      return false
+    } finally {
+      loading.value = false
+    }
+  }
+
   function clearError() {
     error.value = null
   }
@@ -319,6 +450,7 @@ export function useMDM() {
     masters,
     currentMaster,
     stats,
+    breaches,
     loading,
     error,
 
@@ -326,16 +458,21 @@ export function useMDM() {
     statusFilter,
     minConfidence,
     minSources,
+    selectedBreaches,
     filteredMasters,
 
     // Actions
     fetchMasters,
     fetchMaster,
     fetchStats,
+    fetchBreaches,
     runDeduplication,
     mergeMasters,
     promoteToGolden,
+    demoteFromGolden,
     splitMaster,
+    deleteBreach,
+    clearAllData,
     clearError
   }
 }

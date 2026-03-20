@@ -25,10 +25,9 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "80:5173"  # Expose on port 80 (requires sudo/root)
+      - "80:5173"
     environment:
-      - VITE_API_URL=http://noctis:8000
-    command: npm run dev -- --host
+      - VITE_API_URL=http://192.168.1.44:8000
     depends_on:
       - backend
     restart: unless-stopped

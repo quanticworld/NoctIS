@@ -1,19 +1,24 @@
 """Master Data Management service for entity resolution and deduplication"""
 import hashlib
 import uuid
+import json
 from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
+from pathlib import Path
 import logging
 from app.services.typesense_service import typesense_service
 
 logger = logging.getLogger(__name__)
 
+# Configuration file for correlation rules
+RULES_CONFIG_PATH = Path("/app/data/correlation_rules.json")
+
 
 class MDMService:
     """Service for Master Data Management: deduplication, entity resolution, and data quality"""
 
-    # Matching strategies with confidence scores
-    MATCH_STRATEGIES = {
+    # Default matching strategies with confidence scores
+    DEFAULT_MATCH_STRATEGIES = {
         'email_exact': {'confidence': 95, 'keys': ['email']},
         'phone_firstname': {'confidence': 85, 'keys': ['phone', 'first_name']},
         'phone_lastname': {'confidence': 85, 'keys': ['phone', 'last_name']},
@@ -24,6 +29,28 @@ class MDMService:
 
     def __init__(self):
         self.client = typesense_service.client
+        # Load strategies from config file or use defaults
+        self.MATCH_STRATEGIES = self._load_match_strategies()
+
+    def _load_match_strategies(self) -> Dict[str, Any]:
+        """Load matching strategies from config file or use defaults"""
+        try:
+            if RULES_CONFIG_PATH.exists():
+                with open(RULES_CONFIG_PATH, 'r') as f:
+                    config = json.load(f)
+                    strategies = {}
+                    for rule in config.get('rules', []):
+                        strategies[rule['name']] = {
+                            'confidence': rule['confidence'],
+                            'keys': rule['keys']
+                        }
+                    logger.info(f"Loaded {len(strategies)} correlation rules from config")
+                    return strategies
+        except Exception as e:
+            logger.warning(f"Failed to load correlation rules from file: {e}")
+
+        logger.info("Using default correlation rules")
+        return self.DEFAULT_MATCH_STRATEGIES.copy()
 
     async def import_to_silver(
         self,
@@ -275,12 +302,32 @@ class MDMService:
             if new_confidence >= 90 and master.get('status') != 'golden':
                 updates['status'] = 'golden'
 
-            # Merge data fields (only update if missing in master)
+            # Merge data fields - detect conflicts when values differ
+            conflicting_fields = []
             for field in ['email', 'username', 'phone', 'full_name', 'first_name',
                           'last_name', 'gender', 'birth_date', 'address', 'city',
                           'country', 'company', 'job_title', 'social_media', 'website']:
-                if not master.get(field) and silver_doc.get(field):
-                    updates[field] = silver_doc[field]
+                master_value = master.get(field)
+                silver_value = silver_doc.get(field)
+
+                # If both exist and are different, we have a conflict
+                if master_value and silver_value and master_value != silver_value:
+                    conflicting_fields.append({
+                        'field_name': field,
+                        'existing_value': master_value,
+                        'new_value': silver_value,
+                        'existing_source': master.get('breach_names', ['unknown'])[0],  # First breach in master
+                        'new_source': silver_doc['breach_name']
+                    })
+                    logger.warning(f"Conflict detected on field '{field}': '{master_value}' vs '{silver_value}'")
+
+                # If master is empty but silver has value, update
+                elif not master_value and silver_value:
+                    updates[field] = silver_value
+
+            # Store conflicts if any were detected
+            if conflicting_fields:
+                await self._store_conflicts(master_id, silver_doc['source_id'], conflicting_fields)
 
             # Update master
             self.client.collections['master_records'].documents[master_id].update(updates)
@@ -297,59 +344,107 @@ class MDMService:
             logger.error(f"Failed to merge silver to master: {e}")
             return False
 
-    async def process_silver_deduplication(self, batch_size: int = 100) -> Dict[str, int]:
+    async def process_silver_deduplication(
+        self,
+        batch_size: int = 100,
+        max_batches: int = None,
+        page_offset: int = 1,
+        progress_callback = None
+    ) -> Dict[str, int]:
         """
         Process silver records for deduplication and master creation/merge
 
         Args:
             batch_size: Number of records to process per batch
+            max_batches: Maximum number of batches to process (None = all)
+            page_offset: Starting page number (for resuming)
 
         Returns:
-            Stats: {processed, new_masters, merged, errors}
+            Stats: {processed, new_masters, merged, errors, has_more}
         """
-        stats = {'processed': 0, 'new_masters': 0, 'merged': 0, 'errors': 0}
+        stats = {'processed': 0, 'new_masters': 0, 'merged': 0, 'errors': 0, 'has_more': False}
+        batches_processed = 0
 
         try:
-            # Find silver records without master_id
-            # Note: Typesense doesn't support filtering by empty values
-            # So we fetch all and filter in Python (or use NOT operator)
-            results = self.client.collections['silver_records'].documents.search({
-                'q': '*',
-                'per_page': batch_size
-            })
+            # Process batches until no more unlinked records or max_batches reached
+            page = page_offset
 
-            # Filter out records that already have a master_id
-            unlinked_hits = [hit for hit in results['hits'] if not hit['document'].get('master_id')]
+            while True:
+                # Check if we've hit max_batches limit
+                if max_batches and batches_processed >= max_batches:
+                    logger.info(f"Reached max_batches limit: {max_batches}")
+                    stats['has_more'] = True
+                    break
 
-            for hit in unlinked_hits:
-                silver_doc = hit['document']
-                stats['processed'] += 1
+                # Fetch next batch of silver records
+                results = self.client.collections['silver_records'].documents.search({
+                    'q': '*',
+                    'per_page': batch_size,
+                    'page': page
+                })
 
-                try:
-                    # Try to find matching master
-                    match = await self.find_matching_master(silver_doc)
+                # Filter out records that already have a master_id
+                unlinked_hits = [hit for hit in results['hits'] if not hit['document'].get('master_id')]
 
-                    if match:
-                        master_id, strategy, confidence = match
-                        # Merge to existing master
-                        success = await self.merge_silver_to_master(silver_doc, master_id, confidence)
-                        if success:
-                            stats['merged'] += 1
-                    else:
-                        # Create new master
-                        master_id = await self.create_master_from_silver(silver_doc)
-                        stats['new_masters'] += 1
+                # If no unlinked records found, check if there are more pages
+                if not unlinked_hits:
+                    # Check if we've exhausted all pages
+                    if len(results['hits']) == 0 or page > results.get('out_of', page):
+                        logger.info("No more unlinked silver records to process")
+                        break
+                    # Otherwise, try next page
+                    page += 1
+                    continue
 
-                        # Link silver to master
-                        self.client.collections['silver_records'].documents[silver_doc['id']].update({
-                            'master_id': master_id
-                        })
+                logger.info(f"Processing batch {batches_processed + 1}: {len(unlinked_hits)} unlinked records from page {page}")
 
-                except Exception as e:
-                    logger.error(f"Error processing silver {silver_doc['id']}: {e}")
-                    stats['errors'] += 1
+                # Send progress update at start of batch
+                if progress_callback:
+                    await progress_callback({
+                        'type': 'progress',
+                        'batch': batches_processed + 1,
+                        'processed': stats['processed'],
+                        'new_masters': stats['new_masters'],
+                        'merged': stats['merged'],
+                        'errors': stats['errors']
+                    })
 
-            logger.info(f"Deduplication stats: {stats}")
+                for hit in unlinked_hits:
+                    silver_doc = hit['document']
+                    stats['processed'] += 1
+
+                    try:
+                        # Try to find matching master
+                        match = await self.find_matching_master(silver_doc)
+
+                        if match:
+                            master_id, strategy, confidence = match
+                            # Merge to existing master
+                            success = await self.merge_silver_to_master(silver_doc, master_id, confidence)
+                            if success:
+                                stats['merged'] += 1
+                        else:
+                            # Create new master
+                            master_id = await self.create_master_from_silver(silver_doc)
+                            stats['new_masters'] += 1
+
+                            # Link silver to master
+                            self.client.collections['silver_records'].documents[silver_doc['id']].update({
+                                'master_id': master_id
+                            })
+
+                    except Exception as e:
+                        logger.error(f"Error processing silver {silver_doc.get('id', 'unknown')}: {e}")
+                        stats['errors'] += 1
+
+                batches_processed += 1
+                page += 1
+
+                # Log progress every 10 batches
+                if batches_processed % 10 == 0:
+                    logger.info(f"Progress: {stats}")
+
+            logger.info(f"Deduplication complete: {stats}")
             return stats
 
         except Exception as e:
@@ -361,6 +456,48 @@ class MDMService:
         # Sort keys for deterministic hash
         content = '|'.join(str(doc.get(k, '')) for k in sorted(doc.keys()))
         return hashlib.md5(content.encode()).hexdigest()[:12]
+
+    async def _store_conflicts(
+        self,
+        master_id: str,
+        silver_id: str,
+        conflicting_fields: List[Dict[str, Any]]
+    ) -> None:
+        """
+        Store field-level conflicts for manual resolution
+
+        Args:
+            master_id: Master record ID
+            silver_id: Silver record ID causing conflict
+            conflicting_fields: List of conflicts with field details
+        """
+        now = int(datetime.now().timestamp())
+
+        conflict_docs = []
+        for conflict in conflicting_fields:
+            conflict_id = str(uuid.uuid4())
+            conflict_doc = {
+                'id': conflict_id,
+                'master_id': master_id,
+                'silver_id': silver_id,
+                'field_name': conflict['field_name'],
+                'status': 'pending',
+                'existing_value': str(conflict['existing_value']),
+                'new_value': str(conflict['new_value']),
+                'existing_source': conflict['existing_source'],
+                'new_source': conflict['new_source'],
+                'created_at': now
+            }
+            conflict_docs.append(conflict_doc)
+
+        try:
+            self.client.collections['conflicts'].documents.import_(
+                conflict_docs,
+                {'action': 'create'}
+            )
+            logger.info(f"Stored {len(conflict_docs)} conflicts for master {master_id}")
+        except Exception as e:
+            logger.error(f"Failed to store conflicts: {e}")
 
     async def get_master_with_sources(self, master_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -392,6 +529,94 @@ class MDMService:
         except Exception as e:
             logger.error(f"Failed to get master with sources: {e}")
             return None
+
+    async def get_conflicts(
+        self,
+        master_id: Optional[str] = None,
+        status: str = 'pending',
+        page: int = 1,
+        per_page: int = 50
+    ) -> List[Dict[str, Any]]:
+        """
+        Get conflicts for resolution
+
+        Args:
+            master_id: Filter by master ID (optional)
+            status: Filter by status (pending/resolved/ignored)
+            page: Page number
+            per_page: Results per page
+
+        Returns:
+            List of conflict records
+        """
+        try:
+            filter_conditions = [f'status:={status}']
+            if master_id:
+                filter_conditions.append(f'master_id:={master_id}')
+
+            filter_query = ' && '.join(filter_conditions)
+
+            results = self.client.collections['conflicts'].documents.search({
+                'q': '*',
+                'filter_by': filter_query,
+                'per_page': per_page,
+                'page': page,
+                'sort_by': 'created_at:desc'
+            })
+
+            return [hit['document'] for hit in results.get('hits', [])]
+
+        except Exception as e:
+            logger.error(f"Failed to get conflicts: {e}")
+            return []
+
+    async def resolve_conflict(
+        self,
+        conflict_id: str,
+        chosen_value: str,
+        resolved_by: str = 'manual'
+    ) -> bool:
+        """
+        Resolve a conflict by choosing a value
+
+        Args:
+            conflict_id: Conflict ID
+            chosen_value: The value to use (existing_value or new_value)
+            resolved_by: Who/what resolved it (manual/auto)
+
+        Returns:
+            Success status
+        """
+        try:
+            # Get conflict details
+            conflict = self.client.collections['conflicts'].documents[conflict_id].retrieve()
+
+            # Update master record with chosen value
+            master_id = conflict['master_id']
+            field_name = conflict['field_name']
+
+            now = int(datetime.now().timestamp())
+
+            # Update master
+            self.client.collections['master_records'].documents[master_id].update({
+                field_name: chosen_value,
+                'updated_at': now
+            })
+
+            # Mark conflict as resolved
+            self.client.collections['conflicts'].documents[conflict_id].update({
+                'status': 'resolved',
+                'resolved_value': chosen_value,
+                'resolved_by': resolved_by,
+                'resolved_at': now
+            })
+
+            logger.info(f"Resolved conflict {conflict_id}: {field_name} = {chosen_value}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to resolve conflict: {e}")
+            return False
 
 
 # Singleton instance

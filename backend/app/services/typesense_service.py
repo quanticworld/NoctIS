@@ -166,8 +166,37 @@ class TypesenseService:
             'default_sorting_field': 'updated_at'
         }
 
+        # Conflicts: Store field-level conflicts for manual resolution
+        conflicts_schema = {
+            'name': 'conflicts',
+            'enable_nested_fields': True,
+            'fields': [
+                {'name': 'id', 'type': 'string', 'index': True},  # UUID
+                {'name': 'master_id', 'type': 'string', 'index': True},  # Master record with conflict
+                {'name': 'field_name', 'type': 'string', 'facet': True, 'index': True},  # Conflicting field
+                {'name': 'status', 'type': 'string', 'facet': True, 'index': True},  # pending / resolved / ignored
+
+                # Conflict details
+                {'name': 'existing_value', 'type': 'string', 'optional': True},  # Current value in master
+                {'name': 'new_value', 'type': 'string', 'optional': True},  # New value from silver
+                {'name': 'existing_source', 'type': 'string', 'optional': True},  # Breach name of existing value
+                {'name': 'new_source', 'type': 'string', 'optional': True},  # Breach name of new value
+
+                # Resolution
+                {'name': 'resolved_value', 'type': 'string', 'optional': True},  # Value chosen after resolution
+                {'name': 'resolved_by', 'type': 'string', 'optional': True},  # user / auto
+                {'name': 'resolved_at', 'type': 'int64', 'optional': True},
+
+                # Metadata
+                {'name': 'created_at', 'type': 'int64', 'index': True},
+                {'name': 'silver_id', 'type': 'string', 'index': True},  # New silver record causing conflict
+            ],
+            'default_sorting_field': 'created_at'
+        }
+
         results['silver_records'] = await self._ensure_collection(silver_schema)
         results['master_records'] = await self._ensure_collection(master_schema)
+        results['conflicts'] = await self._ensure_collection(conflicts_schema)
 
         self._initialized = True
         return results

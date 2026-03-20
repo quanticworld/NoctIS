@@ -1,5 +1,14 @@
 <template>
   <div class="max-w-7xl mx-auto px-4 py-6">
+    <!-- File Browser Modal -->
+    <FileBrowser
+      :show="showBrowser"
+      mode="file"
+      :initial-path="filePath || '/mnt/osint'"
+      @select="handleFileSelect"
+      @close="showBrowser = false"
+    />
+
     <!-- Step 1: File Selection -->
     <div class="card p-6 mb-6">
       <h2 class="text-lg font-bold text-red-team-500 mb-4 uppercase tracking-wide">Step 1: Select CSV File</h2>
@@ -7,12 +16,17 @@
       <div class="grid grid-cols-2 gap-4">
         <div class="input-group col-span-2">
           <label class="label">File Path</label>
-          <input
-            v-model="filePath"
-            type="text"
-            placeholder="/mnt/osint/breach.csv"
-            class="w-full"
-          />
+          <div class="flex gap-2">
+            <input
+              v-model="filePath"
+              type="text"
+              placeholder="/mnt/osint/breach.csv"
+              class="flex-1"
+            />
+            <button @click="showBrowser = true" class="btn-secondary whitespace-nowrap">
+              BROWSE
+            </button>
+          </div>
         </div>
 
         <div class="input-group">
@@ -261,9 +275,13 @@
 import { ref, computed } from 'vue'
 import { useFileService } from '@/composables/useFiles'
 import { useImportService } from '@/composables/useImport'
+import FileBrowser from '@/components/FileBrowser.vue'
 
 const { analyzeFile: analyzeCSV, fileAnalysis, analyzing, analysisError } = useFileService()
 const { previewImport: previewImportData, startImport: executeImport, cancelImport: cancelImportProcess, importPreview, importProgress, importing, importComplete } = useImportService()
+
+// File browser state
+const showBrowser = ref(false)
 
 // Form state
 const filePath = ref('')
@@ -272,6 +290,10 @@ const breachDate = ref('')
 const customDelimiter = ref('')
 const customEncoding = ref('')
 const columnMapping = ref<Record<string, string | undefined>>({})
+
+function handleFileSelect(path: string) {
+  filePath.value = path
+}
 
 const canPreview = computed(() => {
   return breachName.value.trim().length > 0 &&

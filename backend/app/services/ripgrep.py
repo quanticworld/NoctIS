@@ -62,8 +62,14 @@ class RipgrepService:
             for ft in request.exclude_types:
                 cmd.append(f"--type-not={ft}")
 
-        # Add search path
-        cmd.append(request.search_path)
+        # Add search path - handle Docker /host mount
+        search_path = request.search_path
+        if Path(search_path).is_absolute():
+            # In Docker, host filesystem is mounted at /host
+            search_path = str(Path('/host') / search_path.lstrip('/'))
+
+        print(f"[RIPGREP] Search path: {request.search_path} -> {search_path}")
+        cmd.append(search_path)
 
         return cmd
 
@@ -72,7 +78,13 @@ class RipgrepService:
         """
         Quickly count files that will be searched (without reading content)
         """
-        cmd = ["rg", "--files", request.search_path]
+        # Handle Docker /host mount
+        search_path = request.search_path
+        if Path(search_path).is_absolute():
+            # In Docker, host filesystem is mounted at /host
+            search_path = str(Path('/host') / search_path.lstrip('/'))
+
+        cmd = ["rg", "--files", search_path]
 
         # Add file type filters
         if request.file_types:
@@ -134,6 +146,9 @@ class RipgrepService:
         # We'll just show files_scanned without a total
         total_files = None
 
+        # Log command for debugging
+        print(f"[RIPGREP] Command: {' '.join(cmd)}")
+
         # Start ripgrep process
         process = await asyncio.create_subprocess_exec(
             *cmd,
@@ -149,7 +164,10 @@ class RipgrepService:
         try:
             # Read output line by line
             lines_processed = 0
+            print(f"[RIPGREP] Starting to read stdout from process {process.pid}")
             async for line in process.stdout:
+                if lines_processed == 0:
+                    print(f"[RIPGREP] Received first line from process {process.pid}")
                 # Check if cancel was requested
                 if cancel_event and cancel_event.is_set():
                     print(f"[RIPGREP] Cancel event detected! Killing process {process.pid}")
@@ -257,7 +275,15 @@ class RipgrepService:
                     except ProcessLookupError:
                         pass
 
+            print(f"[RIPGREP] Finished reading stdout, lines_processed={lines_processed}, matches_found={matches_found}")
             await process.wait()
+
+            # Check for errors in stderr
+            if process.returncode != 0:
+                stderr_output = await process.stderr.read()
+                if stderr_output:
+                    error_msg = stderr_output.decode('utf-8', errors='ignore')
+                    print(f"[RIPGREP] Process {process.pid} exited with code {process.returncode}, stderr: {error_msg[:500]}")
 
             # Send final progress
             elapsed = time.time() - start_time
@@ -274,7 +300,7 @@ class RipgrepService:
 
         except asyncio.CancelledError:
             # Task was cancelled, kill the ripgrep process immediately
-            print(f"[RIPGREP] CancelledError caught! Process PID: {process.pid}, returncode: {process.returncode}")
+            print(f"[RIPGREP] CancelledError caught! Process PID: {process.pid}, returncode: {process.returncode}, lines_processed={lines_processed}")
             if process.returncode is None:
                 try:
                     print(f"[RIPGREP] Killing process {process.pid}")

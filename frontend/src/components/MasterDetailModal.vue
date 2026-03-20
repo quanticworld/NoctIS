@@ -216,6 +216,13 @@
           >
             PROMOTE TO GOLDEN
           </button>
+          <button
+            v-if="master.status === 'golden'"
+            @click="demote"
+            class="btn-secondary"
+          >
+            DEMOTE TO SILVER
+          </button>
         </div>
         <button @click="close" class="btn-secondary">
           CLOSE
@@ -244,6 +251,7 @@ const {
   error,
   fetchMaster,
   promoteToGolden,
+  demoteFromGolden,
   splitMaster
 } = useMDM()
 
@@ -296,6 +304,19 @@ async function promote() {
   const success = await promoteToGolden(props.masterId, 'manual')
   if (success) {
     alert('Master promoted to Golden!')
+    emit('refresh')
+    emit('close')
+  }
+}
+
+async function demote() {
+  if (!confirm('Demote this master to Silver status?')) {
+    return
+  }
+
+  const success = await demoteFromGolden(props.masterId)
+  if (success) {
+    alert('Master demoted to Silver!')
     emit('refresh')
     emit('close')
   }

@@ -143,20 +143,67 @@ async def websocket_endpoint(websocket: WebSocket):
                     manager.cancel_events[websocket].set()
 
                 # Cancel the task
+                task_was_cancelled = False
                 if websocket in manager.search_tasks:
                     task = manager.search_tasks[websocket]
                     print(f"[CANCEL] Task found, done={task.done()}")
                     if not task.done():
                         print(f"[CANCEL] Calling task.cancel()")
                         task.cancel()
+                        task_was_cancelled = True
                         try:
                             await task
                             print(f"[CANCEL] Task awaited successfully")
                         except asyncio.CancelledError:
                             print(f"[CANCEL] CancelledError caught")
                             pass
+                    else:
+                        print(f"[CANCEL] Task already done, sending cancel confirmation anyway")
+                        task_was_cancelled = True
                 else:
                     print(f"[CANCEL] No task found for this websocket")
+
+                # Always send a cancel confirmation to the client
+                if task_was_cancelled or websocket not in manager.search_tasks:
+                    from .models import SearchError
+                    error = SearchError(message="Search cancelled")
+                    await manager.send_message(websocket, error.model_dump())
+                    print(f"[CANCEL] Sent cancel confirmation to client")
+
+            elif action == "deduplication":
+                # Run deduplication with progress updates
+                try:
+                    from app.services.mdm_service import mdm_service
+
+                    params = data.get("data", {})
+                    batch_size = params.get("batch_size", 250)
+                    max_batches = params.get("max_batches")
+
+                    # Progress callback to send updates via WebSocket
+                    async def send_progress(progress_data):
+                        await manager.send_message(websocket, progress_data)
+
+                    # Run deduplication with progress callback
+                    stats = await mdm_service.process_silver_deduplication(
+                        batch_size=batch_size,
+                        max_batches=max_batches,
+                        progress_callback=send_progress
+                    )
+
+                    # Send completion message
+                    await manager.send_message(websocket, {
+                        'type': 'complete',
+                        'processed': stats['processed'],
+                        'new_masters': stats['new_masters'],
+                        'merged': stats['merged'],
+                        'errors': stats['errors'],
+                        'has_more': stats['has_more']
+                    })
+
+                except Exception as e:
+                    from .models import SearchError
+                    error = SearchError(message=f"Deduplication failed: {str(e)}")
+                    await manager.send_message(websocket, error.model_dump())
 
             elif action == "ping":
                 # Heartbeat
