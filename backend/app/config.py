@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 
     # Default search settings
-    default_search_path: str = "/mnt/osint/breaches"
+    default_search_path: str = "/breaches"
     default_threads: int = 8
     default_max_filesize: str = "100M"
     max_threads: int = 16

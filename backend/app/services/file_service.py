@@ -36,11 +36,10 @@ class FileService:
         logger.info(f"Resolving file path: '{file_path}'")
         logger.info(f"Base path: {self.base_path}")
 
-        # Handle absolute paths - prefix with /host in Docker
+        # Handle absolute paths
         if os.path.isabs(file_path):
-            # In Docker, host filesystem is at /host
-            resolved = Path('/host') / file_path.lstrip('/')
-            logger.info(f"Resolved as absolute path (Docker): {resolved}")
+            resolved = Path(file_path)
+            logger.info(f"Resolved as absolute path: {resolved}")
             return resolved
 
         # Handle relative paths from base_path
