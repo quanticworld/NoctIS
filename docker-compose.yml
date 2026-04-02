@@ -10,13 +10,12 @@ services:
       - ./backend:/app
     environment:
       - PYTHONUNBUFFERED=1
-      - TYPESENSE_API_KEY=noctis_dev_key_change_in_prod
-      - TYPESENSE_HOST=typesense
-      - TYPESENSE_PORT=8108
-      - TYPESENSE_PROTOCOL=http
+      - MEILISEARCH_HOST=meilisearch
+      - MEILISEARCH_PORT=7700
+      - MEILISEARCH_MASTER_KEY=noctis_dev_meilisearch_key
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     depends_on:
-      - typesense
+      - meilisearch
 
   frontend:
     build:
@@ -34,17 +33,27 @@ services:
     depends_on:
       - backend
 
-  typesense:
-    image: typesense/typesense:26.0
+  meilisearch:
+    image: getmeili/meilisearch:v1.7
     ports:
-      - "8108:8108"
+      - "7700:7700"
     volumes:
-      - typesense-data:/data
-    command: >
-      --data-dir /data
-      --api-key=noctis_dev_key_change_in_prod
-      --enable-cors
+      # Production: Use external data volume (USB drive or external storage)
+      - /media/quantic/80c1859f-536b-459f-a547-d6ecf1dfceea/home/quantic/NoctIS/data/meilisearch:/meili_data
+      # Development: Use local docker volume (uncomment to use instead)
+      # - meilisearch-data:/meili_data
+    environment:
+      - MEILI_MASTER_KEY=noctis_dev_meilisearch_key
+      - MEILI_ENV=development
+      - MEILI_DB_PATH=/meili_data
+      - MEILI_MAX_INDEXING_MEMORY=4gb
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--spider", "http://localhost:7700/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
 
 volumes:
-  typesense-data:
+  meilisearch-data:

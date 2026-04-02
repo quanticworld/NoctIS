@@ -63,7 +63,14 @@ export const useTypesenseStore = defineStore('typesense', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           query: params.query,
-          search_fields: params.search_fields || ['email', 'username', 'phone', 'name'],
+          search_fields: params.search_fields || [
+            'email', 'username', 'password', 'phone',
+            'first_name', 'last_name', 'full_name', 'gender',
+            'address', 'city', 'country', 'zip_code',
+            'company', 'job_title',
+            'social_media', 'website',
+            'domain', 'notes'
+          ],
           filter_by: params.filter_by,
           per_page: params.per_page || 20,
           page: params.page || 1,
@@ -87,7 +94,7 @@ export const useTypesenseStore = defineStore('typesense', () => {
 
   async function fetchCollectionStats() {
     try {
-      const response = await fetch(`${API_URL}${API_PREFIX}/search/stats?collection=leaks`)
+      const response = await fetch(`${API_URL}${API_PREFIX}/search/stats?collection=silver_records`)
 
       if (!response.ok) {
         throw new Error('Failed to fetch stats')

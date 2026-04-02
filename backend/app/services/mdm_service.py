@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 from pathlib import Path
 import logging
-from app.services.typesense_service import typesense_service
+from app.services.meilisearch_service import meilisearch_service
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ class MDMService:
     }
 
     def __init__(self):
-        self.client = typesense_service.client
+        self.client = meilisearch_service.client
         # Load strategies from config file or use defaults
         self.MATCH_STRATEGIES = self._load_match_strategies()
 
@@ -72,12 +72,13 @@ class MDMService:
         silver_docs = []
 
         for idx, doc in enumerate(documents):
-            # Generate unique source_id (deterministic based on content)
+            # Generate unique source_id (deterministic based on content + breach)
+            # Same content from same breach = same ID = upsert instead of duplicate
             content_hash = self._generate_content_hash(doc)
-            source_id = f"{breach_name}_{content_hash}_{idx}"
+            source_id = f"{breach_name}_{content_hash}"
 
             silver_doc = {
-                'id': source_id,  # Typesense will use this as ID
+                'id': source_id,  # Elasticsearch will use this as _id
                 'source_id': source_id,
                 'breach_name': breach_name,
                 'source_file': source_file,
@@ -87,15 +88,15 @@ class MDMService:
 
             silver_docs.append(silver_doc)
 
-        # Import to Typesense (upsert mode - will update if source_id exists)
+        # Import to Meilisearch (bulk API with upsert)
         try:
-            result = self.client.collections['silver_records'].documents.import_(
-                silver_docs,
-                {'action': 'upsert'}  # Update if exists, insert if not
+            result = await meilisearch_service.import_documents(
+                documents=silver_docs,
+                collection_name='silver_records'
             )
 
-            success = sum(1 for r in result if 'success' in str(r).lower())
-            failed = len(result) - success
+            success = result.get('success', 0)
+            failed = result.get('failed', 0)
 
             logger.info(f"Imported to silver: {success} success, {failed} failed")
 
@@ -126,25 +127,31 @@ class MDMService:
             if not all(silver_doc.get(key) for key in keys):
                 continue
 
-            # Build search query
-            filter_conditions = []
+            # Build Elasticsearch query (bool query with must clauses)
+            must_clauses = []
             for key in keys:
                 value = silver_doc[key]
-                # Escape special characters for Typesense
-                escaped_value = value.replace(':', '\\:')
-                filter_conditions.append(f"{key}:={escaped_value}")
-
-            filter_query = ' && '.join(filter_conditions)
+                must_clauses.append({"term": {key: value}})
 
             try:
-                # Search for matching master
-                results = self.client.collections['master_records'].documents.search({
-                    'q': '*',
-                    'filter_by': filter_query,
-                    'per_page': 1
-                })
+                # Search for matching master using Elasticsearch
+                results = await meilisearch_service.search(
+                    query="*",
+                    search_fields=[],
+                    collection_name='master_records',
+                    per_page=1,
+                    page=1,
+                    filter_by=None,
+                    typo_tolerance=False,
+                    prefix=False,
+                    custom_query={
+                        "bool": {
+                            "must": must_clauses
+                        }
+                    }
+                )
 
-                if results['found'] > 0:
+                if results.get('found', 0) > 0:
                     master_id = results['hits'][0]['document']['id']
                     logger.info(f"Found match using {strategy_name}: master_id={master_id}")
                     return (master_id, strategy_name, confidence)
@@ -231,9 +238,16 @@ class MDMService:
         master_doc = {k: v for k, v in master_doc.items() if v is not None}
 
         try:
-            self.client.collections['master_records'].documents.create(master_doc)
-            logger.info(f"Created master record: {master_id} from silver {silver_doc['source_id']}")
-            return master_id
+            # Create document in Elasticsearch
+            result = await meilisearch_service.import_documents(
+                documents=[master_doc],
+                collection_name='master_records'
+            )
+            if result.get('imported', 0) > 0:
+                logger.info(f"Created master record: {master_id} from silver {silver_doc['source_id']}")
+                return master_id
+            else:
+                raise Exception("Failed to create master document")
         except Exception as e:
             logger.error(f"Failed to create master: {e}")
             raise
@@ -256,8 +270,9 @@ class MDMService:
             Success status
         """
         try:
-            # Fetch current master
-            master = self.client.collections['master_records'].documents[master_id].retrieve()
+            # Fetch current master from Elasticsearch
+            response = self.client.get(index='master_records', id=master_id)
+            master = response['_source']
 
             # Update silver_ids
             silver_ids = master.get('silver_ids', [])
@@ -316,7 +331,7 @@ class MDMService:
                         'field_name': field,
                         'existing_value': master_value,
                         'new_value': silver_value,
-                        'existing_source': master.get('breach_names', ['unknown'])[0],  # First breach in master
+                        'existing_source': master.get('breach_names', ['unknown'])[0],
                         'new_source': silver_doc['breach_name']
                     })
                     logger.warning(f"Conflict detected on field '{field}': '{master_value}' vs '{silver_value}'")
@@ -329,14 +344,20 @@ class MDMService:
             if conflicting_fields:
                 await self._store_conflicts(master_id, silver_doc['source_id'], conflicting_fields)
 
-            # Update master
-            self.client.collections['master_records'].documents[master_id].update(updates)
+            # Update master in Elasticsearch
+            self.client.update(
+                index='master_records',
+                id=master_id,
+                body={'doc': updates}
+            )
             logger.info(f"Merged silver {silver_doc['source_id']} into master {master_id}")
 
             # Update silver with master_id link
-            self.client.collections['silver_records'].documents[silver_doc['id']].update({
-                'master_id': master_id
-            })
+            self.client.update(
+                index='silver_records',
+                id=silver_doc['id'],
+                body={'doc': {'master_id': master_id}}
+            )
 
             return True
 
@@ -377,19 +398,24 @@ class MDMService:
                     break
 
                 # Fetch next batch of silver records
-                results = self.client.collections['silver_records'].documents.search({
-                    'q': '*',
-                    'per_page': batch_size,
-                    'page': page
-                })
+                results = await meilisearch_service.search(
+                    query="*",
+                    search_fields=[],
+                    collection_name='silver_records',
+                    per_page=batch_size,
+                    page=page,
+                    filter_by=None,
+                    typo_tolerance=False,
+                    prefix=False
+                )
 
                 # Filter out records that already have a master_id
-                unlinked_hits = [hit for hit in results['hits'] if not hit['document'].get('master_id')]
+                unlinked_hits = [hit for hit in results.get('hits', []) if not hit['document'].get('master_id')]
 
                 # If no unlinked records found, check if there are more pages
                 if not unlinked_hits:
                     # Check if we've exhausted all pages
-                    if len(results['hits']) == 0 or page > results.get('out_of', page):
+                    if len(results.get('hits', [])) == 0 or page > results.get('out_of', page):
                         logger.info("No more unlinked silver records to process")
                         break
                     # Otherwise, try next page
@@ -429,9 +455,11 @@ class MDMService:
                             stats['new_masters'] += 1
 
                             # Link silver to master
-                            self.client.collections['silver_records'].documents[silver_doc['id']].update({
-                                'master_id': master_id
-                            })
+                            self.client.update(
+                                index='silver_records',
+                                id=silver_doc['id'],
+                                body={'doc': {'master_id': master_id}}
+                            )
 
                     except Exception as e:
                         logger.error(f"Error processing silver {silver_doc.get('id', 'unknown')}: {e}")
@@ -491,11 +519,12 @@ class MDMService:
             conflict_docs.append(conflict_doc)
 
         try:
-            self.client.collections['conflicts'].documents.import_(
-                conflict_docs,
-                {'action': 'create'}
+            # Use meilisearch_service to import conflicts
+            result = await meilisearch_service.import_documents(
+                documents=conflict_docs,
+                collection_name='conflicts'
             )
-            logger.info(f"Stored {len(conflict_docs)} conflicts for master {master_id}")
+            logger.info(f"Stored {result.get('imported', 0)} conflicts for master {master_id}")
         except Exception as e:
             logger.error(f"Failed to store conflicts: {e}")
 
@@ -510,7 +539,10 @@ class MDMService:
             Master record with 'sources' field containing all silver records
         """
         try:
-            master = self.client.collections['master_records'].documents[master_id].retrieve()
+            # Fetch master from Elasticsearch
+            response = self.client.get(index='master_records', id=master_id)
+            master = response['_source']
+            master['id'] = master_id  # Add ID to response
 
             # Fetch all linked silver records
             silver_ids = master.get('silver_ids', [])
@@ -518,7 +550,9 @@ class MDMService:
 
             for silver_id in silver_ids:
                 try:
-                    silver = self.client.collections['silver_records'].documents[silver_id].retrieve()
+                    silver_response = self.client.get(index='silver_records', id=silver_id)
+                    silver = silver_response['_source']
+                    silver['id'] = silver_id
                     sources.append(silver)
                 except Exception as e:
                     logger.warning(f"Failed to fetch silver {silver_id}: {e}")
@@ -550,19 +584,27 @@ class MDMService:
             List of conflict records
         """
         try:
-            filter_conditions = [f'status:={status}']
+            # Build Elasticsearch bool query
+            must_clauses = [{"term": {"status": status}}]
             if master_id:
-                filter_conditions.append(f'master_id:={master_id}')
+                must_clauses.append({"term": {"master_id": master_id}})
 
-            filter_query = ' && '.join(filter_conditions)
-
-            results = self.client.collections['conflicts'].documents.search({
-                'q': '*',
-                'filter_by': filter_query,
-                'per_page': per_page,
-                'page': page,
-                'sort_by': 'created_at:desc'
-            })
+            results = await meilisearch_service.search(
+                query="*",
+                search_fields=[],
+                collection_name='conflicts',
+                per_page=per_page,
+                page=page,
+                filter_by=None,
+                typo_tolerance=False,
+                prefix=False,
+                custom_query={
+                    "bool": {
+                        "must": must_clauses
+                    }
+                },
+                sort_by="created_at:desc"
+            )
 
             return [hit['document'] for hit in results.get('hits', [])]
 
@@ -588,8 +630,9 @@ class MDMService:
             Success status
         """
         try:
-            # Get conflict details
-            conflict = self.client.collections['conflicts'].documents[conflict_id].retrieve()
+            # Get conflict details from Elasticsearch
+            conflict_response = self.client.get(index='conflicts', id=conflict_id)
+            conflict = conflict_response['_source']
 
             # Update master record with chosen value
             master_id = conflict['master_id']
@@ -598,18 +641,26 @@ class MDMService:
             now = int(datetime.now().timestamp())
 
             # Update master
-            self.client.collections['master_records'].documents[master_id].update({
-                field_name: chosen_value,
-                'updated_at': now
-            })
+            self.client.update(
+                index='master_records',
+                id=master_id,
+                body={'doc': {
+                    field_name: chosen_value,
+                    'updated_at': now
+                }}
+            )
 
             # Mark conflict as resolved
-            self.client.collections['conflicts'].documents[conflict_id].update({
-                'status': 'resolved',
-                'resolved_value': chosen_value,
-                'resolved_by': resolved_by,
-                'resolved_at': now
-            })
+            self.client.update(
+                index='conflicts',
+                id=conflict_id,
+                body={'doc': {
+                    'status': 'resolved',
+                    'resolved_value': chosen_value,
+                    'resolved_by': resolved_by,
+                    'resolved_at': now
+                }}
+            )
 
             logger.info(f"Resolved conflict {conflict_id}: {field_name} = {chosen_value}")
             return True

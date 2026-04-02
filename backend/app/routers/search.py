@@ -1,8 +1,8 @@
-"""Typesense search API endpoints"""
+"""Meilisearch search API endpoints"""
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional
 from pydantic import BaseModel, Field
-from app.services.typesense_service import typesense_service
+from app.services.meilisearch_service import meilisearch_service
 
 router = APIRouter(prefix="/search", tags=["search"])
 
@@ -11,11 +11,18 @@ class SearchRequest(BaseModel):
     """Search request model"""
     query: str = Field(..., min_length=1, description="Search query")
     search_fields: List[str] = Field(
-        default=["email", "username", "phone", "name"],
+        default=[
+            "email", "username", "phone",
+            "first_name", "last_name", "full_name", "gender",
+            "address", "city", "country", "zip_code",
+            "company", "job_title",
+            "social_media", "website",
+            "domain", "notes"
+        ],
         description="Fields to search in"
     )
     filter_by: Optional[str] = Field(None, description="Filter expression")
-    per_page: int = Field(20, ge=1, le=100, description="Results per page")
+    per_page: int = Field(20, ge=1, le=250, description="Results per page")
     page: int = Field(1, ge=1, description="Page number")
     typo_tolerance: bool = Field(True, description="Enable typo tolerance")
     prefix: bool = Field(True, description="Enable prefix search")
@@ -59,7 +66,7 @@ class FacetsResponse(BaseModel):
 @router.post("/query", response_model=SearchResponse)
 async def search(request: SearchRequest):
     """
-    Search in Typesense collection
+    Search in Meilisearch collection
 
     Supports:
     - Multi-field search
@@ -68,12 +75,13 @@ async def search(request: SearchRequest):
     - Filtering
     - Pagination
     """
-    results = await typesense_service.search(
+    results = await meilisearch_service.search(
         query=request.query,
         search_fields=request.search_fields,
         filter_by=request.filter_by,
         per_page=request.per_page,
         page=request.page,
+        collection_name='silver_records',
         typo_tolerance=request.typo_tolerance,
         prefix=request.prefix
     )
@@ -87,16 +95,16 @@ async def search(request: SearchRequest):
 @router.post("/multi-query")
 async def multi_search(request: MultiSearchRequest):
     """Execute multiple searches in a single request"""
-    results = await typesense_service.multi_search(request.searches)
+    results = await meilisearch_service.multi_search(request.searches)
     return {"results": results}
 
 
 @router.get("/stats", response_model=CollectionStats)
 async def get_collection_stats(
-    collection: str = Query("leaks", description="Collection name")
+    collection: str = Query("silver_records", description="Collection name")
 ):
     """Get collection statistics"""
-    stats = await typesense_service.get_collection_stats(collection)
+    stats = await meilisearch_service.get_collection_stats(collection)
     if not stats:
         raise HTTPException(status_code=404, detail="Collection not found")
     return stats
@@ -104,7 +112,7 @@ async def get_collection_stats(
 
 @router.get("/facets", response_model=FacetsResponse)
 async def get_facets(
-    collection: str = Query("leaks", description="Collection name"),
+    collection: str = Query("silver_records", description="Collection name"),
     fields: Optional[str] = Query(None, description="Comma-separated facet fields")
 ):
     """Get facet counts for specified fields"""
@@ -112,18 +120,24 @@ async def get_facets(
     if fields:
         facet_fields = [f.strip() for f in fields.split(",")]
 
-    facets = await typesense_service.get_facets(collection, facet_fields)
+    facets = await meilisearch_service.get_facets(collection, facet_fields)
     return {"facets": facets}
 
 
 @router.get("/health")
 async def health_check():
-    """Check Typesense server health"""
-    return await typesense_service.health_check()
+    """Check Meilisearch server health"""
+    return await meilisearch_service.health_check()
+
+
+@router.get("/initialization-status")
+async def get_initialization_status():
+    """Get Meilisearch initialization status"""
+    return meilisearch_service.get_initialization_status()
 
 
 @router.post("/initialize")
 async def initialize_collections():
-    """Initialize required Typesense collections"""
-    results = await typesense_service.initialize_collections()
+    """Initialize required Meilisearch collections"""
+    results = await meilisearch_service.initialize_collections()
     return {"collections": results}

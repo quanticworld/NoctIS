@@ -6,42 +6,99 @@
 
       <!-- Search Input -->
       <div class="input-group">
-        <label class="label">Search Query</label>
+        <label class="label">Global Search (fuzzy search across all fields)</label>
         <input
           v-model="query"
           @keyup.enter="performSearch"
           type="text"
-          placeholder="email, username, phone, IP address..."
+          placeholder="john, john@example.com, +33612345678... (optional - leave empty to use filters only)"
           class="w-full"
         />
       </div>
 
-      <!-- Search Fields Selection -->
-      <div class="input-group">
-        <label class="label">Search In</label>
-        <div class="grid grid-cols-4 gap-2">
-          <label v-for="field in availableFields" :key="field" class="flex items-center space-x-2">
-            <input
-              type="checkbox"
-              :value="field"
-              v-model="selectedFields"
-              class="form-checkbox text-red-team-500"
-            />
-            <span class="text-sm text-gray-300">{{ field }}</span>
-          </label>
+      <!-- Filters Section -->
+      <div class="space-y-4 mb-4 p-4 bg-dark-200 border border-gray-700 rounded">
+        <!-- Personal Info Filters -->
+        <div class="grid grid-cols-2 gap-4">
+          <div class="input-group">
+            <label class="label">First Name</label>
+            <input v-model="filters.first_name" type="text" placeholder="John, Dupont..." />
+          </div>
+          <div class="input-group">
+            <label class="label">Last Name</label>
+            <input v-model="filters.last_name" type="text" placeholder="Doe, Martin..." />
+          </div>
+        </div>
+
+        <!-- Contact Filters -->
+        <div class="grid grid-cols-3 gap-4">
+          <div class="input-group">
+            <label class="label">Email</label>
+            <input v-model="filters.email" type="text" placeholder="john@example.com" />
+          </div>
+          <div class="input-group">
+            <label class="label">Phone</label>
+            <input v-model="filters.phone" type="text" placeholder="+336, 0612..." />
+          </div>
+          <div class="input-group">
+            <label class="label">Username</label>
+            <input v-model="filters.username" type="text" placeholder="johndoe, admin..." />
+          </div>
+        </div>
+
+        <!-- Location Filters -->
+        <div class="grid grid-cols-3 gap-4">
+          <div class="input-group">
+            <label class="label">City</label>
+            <input v-model="filters.city" type="text" placeholder="Paris" />
+          </div>
+          <div class="input-group">
+            <label class="label">Country</label>
+            <input v-model="filters.country" type="text" placeholder="France" />
+          </div>
+          <div class="input-group">
+            <label class="label">ZIP Code</label>
+            <input v-model="filters.zip_code" type="text" placeholder="75001" />
+          </div>
+        </div>
+
+        <!-- Professional Filters -->
+        <div class="grid grid-cols-2 gap-4">
+          <div class="input-group">
+            <label class="label">Company</label>
+            <input v-model="filters.company" type="text" placeholder="Acme Corp" />
+          </div>
+          <div class="input-group">
+            <label class="label">Job Title</label>
+            <input v-model="filters.job_title" type="text" placeholder="Software Engineer" />
+          </div>
+        </div>
+
+        <!-- Source Filters -->
+        <div class="grid grid-cols-2 gap-4">
+          <div class="input-group">
+            <label class="label">Breach Name</label>
+            <input v-model="filters.breach_name" type="text" placeholder="LinkedIn, Adobe..." />
+          </div>
+          <div class="input-group">
+            <label class="label">Domain</label>
+            <input v-model="filters.domain" type="text" placeholder="gmail.com..." />
+          </div>
+        </div>
+
+        <!-- Clear Filters -->
+        <div class="flex justify-end">
+          <button
+            @click="clearFilters"
+            class="btn-secondary text-sm"
+          >
+            CLEAR FILTERS
+          </button>
         </div>
       </div>
 
-      <!-- Filters -->
-      <div class="grid grid-cols-3 gap-4">
-        <div class="input-group">
-          <label class="label">Breach Name</label>
-          <input v-model="breachFilter" type="text" placeholder="LinkedIn, Adobe..." />
-        </div>
-        <div class="input-group">
-          <label class="label">Domain</label>
-          <input v-model="domainFilter" type="text" placeholder="gmail.com..." />
-        </div>
+      <!-- Quick Options -->
+      <div class="grid grid-cols-3 gap-4 mb-4">
         <div class="input-group">
           <label class="label">Results Per Page</label>
           <select v-model.number="perPage" class="w-full">
@@ -118,6 +175,7 @@
           class="bg-dark-200 border border-gray-700 p-4 hover:border-red-team-500 transition-colors"
         >
           <div class="grid grid-cols-2 gap-3 text-sm">
+            <!-- Identifiers -->
             <div v-if="result.email">
               <span class="text-gray-500">Email:</span>
               <span class="text-gray-300 ml-2 font-mono">{{ result.email }}</span>
@@ -142,14 +200,67 @@
               <span class="text-gray-500">IP:</span>
               <span class="text-gray-300 ml-2 font-mono">{{ result.ip_address }}</span>
             </div>
-            <div v-if="result.name">
+
+            <!-- Personal Info -->
+            <div v-if="result.first_name || result.last_name">
               <span class="text-gray-500">Name:</span>
-              <span class="text-gray-300 ml-2">{{ result.name }}</span>
+              <span class="text-gray-300 ml-2">{{ result.first_name }} {{ result.last_name }}</span>
             </div>
+            <div v-if="result.birth_date">
+              <span class="text-gray-500">Birth Date:</span>
+              <span class="text-gray-300 ml-2">{{ result.birth_date }}</span>
+            </div>
+            <div v-if="result.gender">
+              <span class="text-gray-500">Gender:</span>
+              <span class="text-gray-300 ml-2">{{ result.gender }}</span>
+            </div>
+
+            <!-- Location -->
+            <div v-if="result.address">
+              <span class="text-gray-500">Address:</span>
+              <span class="text-gray-300 ml-2">{{ result.address }}</span>
+            </div>
+            <div v-if="result.city || result.country">
+              <span class="text-gray-500">Location:</span>
+              <span class="text-gray-300 ml-2">{{ result.city }}{{ result.city && result.country ? ', ' : '' }}{{ result.country }}</span>
+            </div>
+            <div v-if="result.zip_code">
+              <span class="text-gray-500">ZIP:</span>
+              <span class="text-gray-300 ml-2">{{ result.zip_code }}</span>
+            </div>
+
+            <!-- Professional -->
+            <div v-if="result.company">
+              <span class="text-gray-500">Company:</span>
+              <span class="text-gray-300 ml-2">{{ result.company }}</span>
+            </div>
+            <div v-if="result.job_title">
+              <span class="text-gray-500">Job Title:</span>
+              <span class="text-gray-300 ml-2">{{ result.job_title }}</span>
+            </div>
+
+            <!-- Online Presence -->
+            <div v-if="result.social_media">
+              <span class="text-gray-500">Social Media:</span>
+              <span class="text-gray-300 ml-2 text-xs">{{ result.social_media }}</span>
+            </div>
+            <div v-if="result.website">
+              <span class="text-gray-500">Website:</span>
+              <span class="text-gray-300 ml-2 text-xs">{{ result.website }}</span>
+            </div>
+
+            <!-- Source -->
             <div v-if="result.breach_name">
               <span class="text-gray-500">Breach:</span>
               <span class="text-red-team-500 ml-2 font-bold">{{ result.breach_name }}</span>
             </div>
+            <div v-if="result.domain">
+              <span class="text-gray-500">Domain:</span>
+              <span class="text-gray-300 ml-2">{{ result.domain }}</span>
+            </div>
+          </div>
+          <div v-if="result.notes" class="mt-2 text-xs text-gray-400">
+            <span class="text-gray-500">Notes:</span> {{ truncate(result.notes, 100) }}
           </div>
           <div v-if="result.source_file" class="mt-2 text-xs text-gray-500 truncate">
             Source: {{ result.source_file }}
@@ -197,27 +308,37 @@ const typesenseStore = useTypesenseStore()
 
 // Search state
 const query = ref('')
-const selectedFields = ref(['email', 'username', 'phone', 'ip_address'])
-const breachFilter = ref('')
-const domainFilter = ref('')
 const perPage = ref(50)
 const currentPage = ref(1)
 const typoTolerance = ref(true)
 const prefixSearch = ref(true)
 
-const availableFields = [
-  'email',
-  'username',
-  'password',
-  'password_hash',
-  'phone',
-  'ip_address',
-  'name',
-  'address'
-]
+// Default search fields (all main fields for fuzzy search)
+const searchFields = ['email', 'username', 'phone', 'first_name', 'last_name', 'city', 'country', 'company']
+
+// Advanced filters (exact match)
+const filters = ref({
+  first_name: '',
+  last_name: '',
+  email: '',
+  phone: '',
+  username: '',
+  city: '',
+  country: '',
+  zip_code: '',
+  company: '',
+  job_title: '',
+  breach_name: '',
+  domain: ''
+})
 
 const canSearch = computed(() => {
-  return query.value.trim().length > 0 && selectedFields.value.length > 0
+  // Can search if either:
+  // 1. Query is present (global fuzzy search)
+  // 2. Or at least one filter is filled (exact match search)
+  const hasQuery = query.value.trim().length > 0
+  const hasFilters = Object.values(filters.value).some(v => v.trim().length > 0)
+  return hasQuery || hasFilters
 })
 
 async function performSearch() {
@@ -228,28 +349,37 @@ async function performSearch() {
 }
 
 async function executeSearch() {
-  let filterBy = ''
-  const filters: string[] = []
+  // Build filter_by from advanced filters
+  const filterConditions: string[] = []
 
-  if (breachFilter.value.trim()) {
-    filters.push(`breach_name:=${breachFilter.value.trim()}`)
-  }
-  if (domainFilter.value.trim()) {
-    filters.push(`domain:=${domainFilter.value.trim()}`)
-  }
+  // Add all non-empty filters with partial match (using : operator for contains)
+  Object.entries(filters.value).forEach(([field, value]) => {
+    if (value && value.trim()) {
+      filterConditions.push(`${field}:${value.trim()}`)
+    }
+  })
 
-  if (filters.length > 0) {
-    filterBy = filters.join(' && ')
-  }
+  const filterBy = filterConditions.length > 0 ? filterConditions.join(' && ') : undefined
+
+  // If no query but filters exist, use wildcard search
+  const searchQuery = query.value.trim() || '*'
+  // Always use all searchFields for global fuzzy search
+  const fieldsToSearch = query.value.trim() ? searchFields : ['email']  // Use any field for wildcard
 
   await typesenseStore.search({
-    query: query.value,
-    search_fields: selectedFields.value,
-    filter_by: filterBy || undefined,
+    query: searchQuery,
+    search_fields: fieldsToSearch,
+    filter_by: filterBy,
     per_page: perPage.value,
     page: currentPage.value,
     typo_tolerance: typoTolerance.value,
     prefix: prefixSearch.value
+  })
+}
+
+function clearFilters() {
+  Object.keys(filters.value).forEach(key => {
+    filters.value[key as keyof typeof filters.value] = ''
   })
 }
 
@@ -262,6 +392,7 @@ function clearResults() {
   typesenseStore.clearResults()
   query.value = ''
   currentPage.value = 1
+  clearFilters()
 }
 
 function truncate(text: string, maxLength: number): string {

@@ -35,6 +35,7 @@
             <option value="">Auto-detect</option>
             <option value=",">, (Comma)</option>
             <option value=";">; (Semicolon)</option>
+            <option value=":">: (Colon)</option>
             <option value="|">| (Pipe)</option>
             <option value="	">Tab</option>
           </select>
@@ -118,7 +119,10 @@
               <!-- Source Column -->
               <div>
                 <div class="text-sm text-gray-400">{{ column.name }}</div>
-                <div class="text-xs text-gray-600">{{ column.type }}</div>
+                <div class="text-xs text-gray-600">{{ column.detected_type }}</div>
+                <div v-if="column.sample_values && column.sample_values.length > 0" class="text-xs text-gray-500 mt-1">
+                  Ex: {{ column.sample_values.slice(0, 3).join(', ').substring(0, 40) }}{{ column.sample_values.slice(0, 3).join(', ').length > 40 ? '...' : '' }}
+                </div>
               </div>
 
               <!-- Arrow -->

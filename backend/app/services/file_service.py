@@ -241,7 +241,7 @@ class FileService:
 
                     # Strategy 1: Try csv.Sniffer
                     try:
-                        dialect = csv.Sniffer().sniff(sample, delimiters=',;\t|')
+                        dialect = csv.Sniffer().sniff(sample, delimiters=',;\t|:')
                         delimiter = dialect.delimiter
                     except Exception:
                         pass
@@ -249,7 +249,7 @@ class FileService:
                     # Strategy 2: Count delimiter occurrences on first lines
                     if delimiter == ',':
                         lines = sample.split('\n')[:5]
-                        candidates = {',': 0, ';': 0, '\t': 0, '|': 0}
+                        candidates = {',': 0, ';': 0, '\t': 0, '|': 0, ':': 0}
 
                         for line in lines:
                             if line.strip():
@@ -270,6 +270,7 @@ class FileService:
                 has_header = not first_col.replace('.', '').replace(',', '').isdigit()
 
             try:
+                # Read CSV with or without header
                 df = pd.read_csv(
                     full_path,
                     encoding=encoding,
@@ -280,12 +281,17 @@ class FileService:
                     header=0 if has_header else None  # Use first row as header only if it's actually a header
                 )
 
-                # If no header, create column names as "col_0", "col_1", etc.
+                # CRITICAL: If no header, pandas will use integers as column names
+                # We MUST convert them to "col_0", "col_1", etc. for consistency
                 if not has_header:
                     df.columns = [f"col_{i}" for i in range(len(df.columns))]
                     logger.info(f"No header detected, using column indices: {df.columns.tolist()}")
                 else:
-                    logger.info(f"Header detected: {df.columns.tolist()[:5]}...")
+                    # IMPORTANT: Even with header, normalize to col_N format for consistency
+                    # This ensures frontend always uses col_0, col_1, etc.
+                    original_columns = df.columns.tolist()
+                    df.columns = [f"col_{i}" for i in range(len(df.columns))]
+                    logger.info(f"Header detected: {original_columns[:5]}... -> normalized to: {df.columns.tolist()}")
 
             except Exception as parse_error:
                 logger.error(f"Failed to parse with delimiter '{delimiter}': {parse_error}")

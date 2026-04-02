@@ -1,4 +1,4 @@
-import { ref } from 'vue'
+import { ref, onUnmounted } from 'vue'
 
 export interface ImportRequest {
   file_path: string
@@ -31,8 +31,8 @@ export function useImportService() {
   const importProgress = ref<ImportProgress | null>(null)
   const importing = ref(false)
   const importComplete = ref(false)
-  let websocket: WebSocket | null = null
-  let currentImportId: string | null = null
+  let currentJobId: string | null = null
+  let pollInterval: number | null = null
 
   async function previewImport(request: ImportRequest) {
     try {
@@ -58,78 +58,190 @@ export function useImportService() {
     importing.value = true
     importComplete.value = false
     importProgress.value = null
-    currentImportId = `import_${Date.now()}`
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.host}/api/v1/import/stream`
+    try {
+      // Start background import
+      const response = await fetch('/api/v1/import/background/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(request)
+      })
 
-    websocket = new WebSocket(wsUrl)
-
-    websocket.onopen = () => {
-      const payload = {
-        ...request,
-        import_id: currentImportId
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.detail || 'Failed to start import')
       }
-      websocket?.send(JSON.stringify(payload))
-    }
 
-    websocket.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-        console.log('Import progress update:', data)
-        importProgress.value = data
+      const data = await response.json()
+      currentJobId = data.job_id
 
-        if (data.status === 'completed' || data.status === 'error' || data.status === 'cancelled') {
-          importing.value = false
-          importComplete.value = true
-          websocket?.close()
-        }
-      } catch (err) {
-        console.error('WebSocket message parse error:', err)
-      }
-    }
+      // Start polling for progress
+      startPolling()
 
-    websocket.onerror = (error) => {
-      console.error('WebSocket error:', error)
+    } catch (err) {
+      console.error('Import start error:', err)
       importing.value = false
       importProgress.value = {
         status: 'error',
-        message: 'WebSocket connection error',
+        message: err instanceof Error ? err.message : 'Failed to start import',
         progress: 0
       }
     }
+  }
 
-    websocket.onclose = () => {
-      if (importing.value) {
-        // Unexpected close
+  async function pollProgress() {
+    if (!currentJobId) return
+
+    try {
+      const response = await fetch(`/api/v1/import/background/status/${currentJobId}`)
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch import status')
+      }
+
+      const job = await response.json()
+
+      // Convert backend progress format to frontend format
+      const backendProgress = job.progress
+
+      importProgress.value = {
+        status: mapStatus(job.status),
+        message: getStatusMessage(job.status, backendProgress),
+        progress: backendProgress.percentage || 0,
+        imported: backendProgress.imported_count,
+        failed: backendProgress.error_count,
+        total_rows: backendProgress.total_lines,
+        rows_processed: backendProgress.processed_lines
+      }
+
+      // Check if import is finished
+      if (['completed', 'failed', 'cancelled'].includes(job.status)) {
         importing.value = false
-        if (importProgress.value?.status !== 'completed') {
-          importProgress.value = {
-            status: 'error',
-            message: 'Connection closed unexpectedly',
-            progress: importProgress.value?.progress || 0
-          }
+        importComplete.value = true
+        stopPolling()
+
+        if (job.status === 'failed') {
+          importProgress.value.status = 'error'
+          importProgress.value.message = job.error_message || 'Import failed'
         }
       }
+
+    } catch (err) {
+      console.error('Poll progress error:', err)
+    }
+  }
+
+  function mapStatus(backendStatus: string): 'analyzing' | 'importing' | 'completed' | 'error' | 'cancelled' {
+    switch (backendStatus) {
+      case 'pending':
+        return 'analyzing'
+      case 'running':
+        return 'importing'
+      case 'completed':
+        return 'completed'
+      case 'failed':
+        return 'error'
+      case 'cancelled':
+        return 'cancelled'
+      default:
+        return 'analyzing'
+    }
+  }
+
+  function getStatusMessage(status: string, progress: any): string {
+    switch (status) {
+      case 'pending':
+        return 'Starting import...'
+      case 'running':
+        const speed = progress.speed_lines_per_sec || 0
+        const eta = progress.eta_seconds || null
+        let msg = `Importing... ${progress.processed_lines?.toLocaleString() || 0} / ${progress.total_lines?.toLocaleString() || 0} lines`
+        if (speed > 0) {
+          msg += ` (${formatSpeed(speed)})`
+        }
+        if (eta) {
+          msg += ` - ETA: ${formatETA(eta)}`
+        }
+        return msg
+      case 'completed':
+        return `Import completed! ${progress.imported_count?.toLocaleString() || 0} records imported`
+      case 'failed':
+        return 'Import failed'
+      case 'cancelled':
+        return 'Import cancelled'
+      default:
+        return 'Processing...'
+    }
+  }
+
+  function formatSpeed(linesPerSec: number): string {
+    if (linesPerSec < 1000) {
+      return `${Math.round(linesPerSec)} lines/s`
+    } else if (linesPerSec < 1000000) {
+      return `${(linesPerSec / 1000).toFixed(1)}k lines/s`
+    } else {
+      return `${(linesPerSec / 1000000).toFixed(2)}M lines/s`
+    }
+  }
+
+  function formatETA(seconds: number): string {
+    if (seconds < 60) {
+      return `${Math.round(seconds)}s`
+    } else if (seconds < 3600) {
+      const minutes = Math.floor(seconds / 60)
+      const secs = Math.round(seconds % 60)
+      return `${minutes}m ${secs}s`
+    } else {
+      const hours = Math.floor(seconds / 3600)
+      const minutes = Math.floor((seconds % 3600) / 60)
+      return `${hours}h ${minutes}m`
+    }
+  }
+
+  function startPolling() {
+    stopPolling() // Clear any existing interval
+
+    // Poll immediately
+    pollProgress()
+
+    // Then poll every 2 seconds
+    pollInterval = window.setInterval(() => {
+      pollProgress()
+    }, 2000)
+  }
+
+  function stopPolling() {
+    if (pollInterval !== null) {
+      clearInterval(pollInterval)
+      pollInterval = null
     }
   }
 
   async function cancelImport() {
-    if (!currentImportId) return
+    if (!currentJobId) return
 
     try {
-      await fetch('/api/v1/import/cancel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ import_id: currentImportId })
+      await fetch(`/api/v1/import/background/cancel/${currentJobId}`, {
+        method: 'POST'
       })
 
-      websocket?.close()
       importing.value = false
+      stopPolling()
+
+      importProgress.value = {
+        status: 'cancelled',
+        message: 'Import cancelled',
+        progress: importProgress.value?.progress || 0
+      }
     } catch (err) {
       console.error('Cancel import error:', err)
     }
   }
+
+  // Cleanup on unmount
+  onUnmounted(() => {
+    stopPolling()
+  })
 
   return {
     importPreview,

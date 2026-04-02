@@ -1,8 +1,10 @@
 """Import API endpoints with WebSocket progress"""
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Query
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from pydantic import BaseModel, Field
 from app.services.import_service import import_service
+from app.services.background_import_service import background_import_service
+from app.services.import_executor import import_executor
 import json
 import logging
 
@@ -142,3 +144,120 @@ async def cancel_import(
         raise HTTPException(status_code=404, detail="Import not found or already completed")
 
     return {"status": "cancelled", "import_id": import_id}
+
+
+# ============================================================================
+# Background Import API (REST endpoints for imports without WebSocket)
+# ============================================================================
+
+
+@router.post("/background/start")
+async def start_background_import(request: ImportRequest):
+    """
+    Start an import job in the background
+
+    Returns a job_id that can be used to track progress.
+    The import will continue even if the client disconnects.
+    """
+    # Create the job
+    job = background_import_service.create_job(
+        file_path=request.file_path,
+        breach_name=request.breach_name,
+        column_mapping=request.column_mapping,
+        breach_date=request.breach_date,
+        batch_size=request.batch_size or 1000
+    )
+
+    # Submit the job for execution
+    import_executor.submit_job(job.job_id)
+
+    logger.info(f"Started background import job {job.job_id}")
+
+    return {
+        "job_id": job.job_id,
+        "status": "submitted",
+        "message": "Import job started in background"
+    }
+
+
+@router.get("/background/status/{job_id}")
+async def get_import_status(job_id: str):
+    """
+    Get the status and progress of a background import job
+
+    Returns detailed progress information including:
+    - Status (pending, running, completed, failed, cancelled)
+    - Progress percentage
+    - Lines processed
+    - Speed (lines/sec)
+    - ETA
+    """
+    job = background_import_service.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return job.to_dict()
+
+
+@router.get("/background/jobs")
+async def list_import_jobs(
+    status: Optional[str] = Query(None, description="Filter by status")
+):
+    """
+    List all import jobs
+
+    Optionally filter by status: pending, running, completed, failed, cancelled
+    """
+    jobs = background_import_service.get_all_jobs()
+
+    # Filter by status if provided
+    if status:
+        jobs = {
+            job_id: job for job_id, job in jobs.items()
+            if job.status == status
+        }
+
+    # Convert to list and sort by creation time (newest first)
+    job_list = [job.to_dict() for job in jobs.values()]
+    job_list.sort(key=lambda x: x['created_at'], reverse=True)
+
+    return {
+        "total": len(job_list),
+        "jobs": job_list
+    }
+
+
+@router.post("/background/cancel/{job_id}")
+async def cancel_background_import(job_id: str):
+    """
+    Cancel a running background import job
+    """
+    cancelled = await background_import_service.cancel_job(job_id)
+    if not cancelled:
+        raise HTTPException(
+            status_code=400,
+            detail="Job not found or not in a cancellable state"
+        )
+
+    return {
+        "status": "cancelled",
+        "job_id": job_id,
+        "message": "Job cancelled successfully"
+    }
+
+
+@router.delete("/background/cleanup")
+async def cleanup_old_jobs(
+    max_age_hours: int = Query(24, ge=1, le=168, description="Max age in hours")
+):
+    """
+    Clean up old completed/failed jobs
+
+    Default: removes jobs older than 24 hours
+    """
+    await background_import_service.cleanup_old_jobs(max_age_hours)
+
+    return {
+        "status": "success",
+        "message": f"Cleaned up jobs older than {max_age_hours} hours"
+    }

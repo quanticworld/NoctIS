@@ -38,6 +38,12 @@ const router = createRouter({
       meta: { title: 'MDM', icon: '🎯' },
     },
     {
+      path: '/scrapers',
+      name: 'scrapers',
+      component: () => import('@/views/ScrapersView.vue'),
+      meta: { title: 'Scrapers', icon: '🕷️' },
+    },
+    {
       path: '/settings',
       name: 'settings',
       component: () => import('@/views/SettingsView.vue'),
