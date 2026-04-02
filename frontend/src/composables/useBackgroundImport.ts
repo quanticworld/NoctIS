@@ -29,7 +29,7 @@ export interface ImportJob {
 }
 
 export function useBackgroundImport() {
-  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+  const API_URL = ''  // Use relative URLs so Vite proxy can redirect to backend
   const API_PREFIX = '/api/v1'
 
   const currentJob = ref<ImportJob | null>(null)

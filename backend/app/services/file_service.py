@@ -36,9 +36,14 @@ class FileService:
         logger.info(f"Resolving file path: '{file_path}'")
         logger.info(f"Base path: {self.base_path}")
 
-        # Handle absolute paths
+        # Handle absolute paths with /host prefix (for Docker mount)
         if os.path.isabs(file_path):
             resolved = Path(file_path)
+            # Try with /host prefix first (for Docker mount)
+            host_path = Path('/host') / str(resolved).lstrip('/')
+            if host_path.exists():
+                logger.info(f"Resolved with /host prefix: {host_path}")
+                return host_path
             logger.info(f"Resolved as absolute path: {resolved}")
             return resolved
 

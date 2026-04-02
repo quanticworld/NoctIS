@@ -4,7 +4,7 @@
     <FileBrowser
       :show="showBrowser"
       mode="file"
-      :initial-path="filePath || '/breaches'"
+      :initial-path="filePath || '/'"
       @select="handleFileSelect"
       @close="showBrowser = false"
     />
@@ -20,7 +20,7 @@
             <input
               v-model="filePath"
               type="text"
-              placeholder="/breaches/breach.csv"
+              placeholder="/"
               class="flex-1"
             />
             <button @click="showBrowser = true" class="btn-secondary whitespace-nowrap">

@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from .config import settings
 from .models import StatsRequest, StatsResponse, ConfigResponse, RegexTemplate
 from .services.stats import StatsService
-from .services.meilisearch_service import meilisearch_service
+from .services.clickhouse_service import clickhouse_service
 from .websocket import websocket_endpoint
 from .websocket_scrapers import websocket_scraper_logs
 from .routers import files, search, import_router, mdm, scrapers, operations
@@ -18,74 +18,74 @@ import asyncio
 logger = logging.getLogger(__name__)
 
 
-async def _initialize_meilisearch_background():
-    """Background task to initialize Meilisearch without blocking startup"""
-    max_retries = 60  # 60 attempts
-    retry_delay = 5   # 5 seconds between each
-    meilisearch_ready = False
+async def _initialize_clickhouse_background():
+    """Background task to initialize ClickHouse without blocking startup"""
+    max_retries = 30  # 30 attempts (ClickHouse starts faster)
+    retry_delay = 2   # 2 seconds between each
+    clickhouse_ready = False
 
     # Update status
-    meilisearch_service._initialization_status = "checking"
-    meilisearch_service._initialization_message = "Checking Meilisearch connection..."
+    clickhouse_service._initialization_status = "checking"
+    clickhouse_service._initialization_message = "Checking ClickHouse connection..."
 
     for attempt in range(1, max_retries + 1):
         try:
             # Update progress during health checks
-            meilisearch_service._initialization_progress = min(int((attempt / max_retries) * 10), 10)
+            clickhouse_service._initialization_progress = min(int((attempt / max_retries) * 10), 10)
 
-            health = await meilisearch_service.health_check()
+            health = await clickhouse_service.health_check()
             if health.get('status') == 'healthy':
-                logger.info(f"✅ Meilisearch is healthy (attempt {attempt}/{max_retries})")
-                meilisearch_service._initialization_message = "Meilisearch is healthy"
-                meilisearch_ready = True
+                logger.info(f"✅ ClickHouse is healthy (attempt {attempt}/{max_retries})")
+                clickhouse_service._initialization_message = "ClickHouse is healthy"
+                clickhouse_ready = True
                 break
             else:
-                logger.warning(f"⚠️  Meilisearch health check returned: {health}")
-                meilisearch_service._initialization_message = f"Waiting for Meilisearch... (attempt {attempt}/{max_retries})"
+                logger.warning(f"⚠️  ClickHouse health check returned: {health}")
+                clickhouse_service._initialization_message = f"Waiting for ClickHouse... (attempt {attempt}/{max_retries})"
                 if attempt < max_retries:
                     await asyncio.sleep(retry_delay)
         except Exception as e:
-            logger.info(f"⏳ Meilisearch not ready yet (attempt {attempt}/{max_retries}), retrying in {retry_delay}s...")
+            logger.info(f"⏳ ClickHouse not ready yet (attempt {attempt}/{max_retries}), retrying in {retry_delay}s...")
             logger.debug(f"   Error: {e}")
-            meilisearch_service._initialization_message = f"Connecting to Meilisearch... ({attempt}/{max_retries})"
+            clickhouse_service._initialization_message = f"Connecting to ClickHouse... ({attempt}/{max_retries})"
 
             if attempt >= max_retries:
-                logger.error(f"❌ Meilisearch failed to start after {max_retries * retry_delay}s ({max_retries} attempts)")
+                logger.error(f"❌ ClickHouse failed to start after {max_retries * retry_delay}s ({max_retries} attempts)")
                 logger.error(f"   Last error: {e}")
-                meilisearch_service._initialization_status = "error"
-                meilisearch_service._initialization_message = f"Meilisearch connection failed: {str(e)}"
+                clickhouse_service._initialization_status = "error"
+                clickhouse_service._initialization_message = f"ClickHouse connection failed: {str(e)}"
             else:
                 await asyncio.sleep(retry_delay)
 
-    if not meilisearch_ready:
-        meilisearch_service._initialization_status = "error"
-        meilisearch_service._initialization_message = "Meilisearch is not ready"
-        logger.error("❌ Meilisearch is not ready - Meilisearch features will be unavailable")
+    if not clickhouse_ready:
+        clickhouse_service._initialization_status = "error"
+        clickhouse_service._initialization_message = "ClickHouse is not ready"
+        logger.error("❌ ClickHouse is not ready - ClickHouse features will be unavailable")
     else:
-        # Initialize collections
-        logger.info("📦 Initializing Meilisearch collections...")
+        # Initialize tables
+        logger.info("📦 Verifying ClickHouse tables...")
         try:
-            results = await meilisearch_service.initialize_collections()
-            logger.info(f"✅ Collections initialized: {results}")
+            results = await clickhouse_service.initialize_collections()
+            logger.info(f"✅ Tables verified: {results}")
 
-            # Get collection statistics
-            for collection_name in ['silver_records', 'master_records', 'conflicts']:
+            # Get table statistics
+            for table_name in ['silver_records', 'master_records', 'conflicts']:
                 try:
-                    stats = await meilisearch_service.get_collection_stats(collection_name)
+                    stats = await clickhouse_service.get_collection_stats(table_name)
                     if stats:
                         num_docs = stats.get('num_documents', 0)
-                        logger.info(f"   📊 {collection_name}: {num_docs:,} documents")
+                        logger.info(f"   📊 {table_name}: {num_docs:,} documents")
                 except Exception as e:
-                    logger.debug(f"   Could not get stats for {collection_name}: {e}")
+                    logger.debug(f"   Could not get stats for {table_name}: {e}")
 
             logger.info("=" * 60)
-            logger.info("🎯 NoctIS Meilisearch is fully initialized!")
+            logger.info("🎯 NoctIS ClickHouse is fully initialized!")
             logger.info("=" * 60)
 
         except Exception as e:
-            logger.error(f"❌ Failed to initialize Meilisearch collections: {e}")
-            meilisearch_service._initialization_status = "error"
-            meilisearch_service._initialization_message = f"Failed to initialize collections: {str(e)}"
+            logger.error(f"❌ Failed to verify ClickHouse tables: {e}")
+            clickhouse_service._initialization_status = "error"
+            clickhouse_service._initialization_message = f"Failed to verify tables: {str(e)}"
 
 
 @asynccontextmanager
@@ -95,10 +95,10 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
     logger.info("🚀 Starting NoctIS - OSINT Red Team Toolbox")
     logger.info("=" * 60)
-    logger.info("⚡ Backend starting immediately - Meilisearch initialization in background")
+    logger.info("⚡ Backend starting immediately - ClickHouse initialization in background")
 
-    # Launch Meilisearch initialization in background
-    asyncio.create_task(_initialize_meilisearch_background())
+    # Launch ClickHouse initialization in background
+    asyncio.create_task(_initialize_clickhouse_background())
 
     # Start scraper scheduler
     logger.info("🕒 Starting scraper scheduler...")

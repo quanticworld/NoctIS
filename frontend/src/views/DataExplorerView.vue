@@ -129,7 +129,7 @@
           <input
             v-model="searchPath"
             type="text"
-            :placeholder="searchMode === 'file' ? '/breaches/France 01.txt' : '/breaches'"
+            placeholder="/"
             class="flex-1"
           />
           <button @click="browseFiles" class="btn-secondary whitespace-nowrap">
@@ -288,13 +288,13 @@ const statsStore = useStatsStore()
 
 // Search target configuration
 const searchMode = ref<'directory' | 'file'>('directory')
-const searchPath = ref('/breaches')
+const searchPath = ref('/')
 
 // File browser state
 const showBrowser = ref(false)
 const browseLoading = ref(false)
 const browseError = ref<string | null>(null)
-const browsePath = ref('/breaches')
+const browsePath = ref('/')
 const browseParentPath = ref<string | null>(null)
 const browseItems = ref<any[]>([])
 

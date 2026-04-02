@@ -27,7 +27,8 @@ export interface CollectionStats {
 }
 
 export const useTypesenseStore = defineStore('typesense', () => {
-  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+  // Use relative URLs so Vite proxy can redirect to backend
+  const API_URL = ''
   const API_PREFIX = '/api/v1'
 
   // State

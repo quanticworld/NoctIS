@@ -7,7 +7,7 @@ from datetime import datetime
 import logging
 from app.config import settings
 from app.services.file_service import file_service
-from app.services.meilisearch_service import meilisearch_service
+from app.services.clickhouse_service import clickhouse_service
 from app.services.mdm_service import mdm_service
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ class ImportService:
             Progress updates with status and statistics
         """
         if batch_size is None:
-            batch_size = settings.meilisearch_batch_size
+            batch_size = settings.clickhouse_batch_size
 
         import_id = import_id or f"import_{datetime.now().timestamp()}"
         self.active_imports[import_id] = True

@@ -1,8 +1,8 @@
-"""Meilisearch search API endpoints"""
+"""ClickHouse search API endpoints"""
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional
 from pydantic import BaseModel, Field
-from app.services.meilisearch_service import meilisearch_service
+from app.services.clickhouse_service import clickhouse_service
 
 router = APIRouter(prefix="/search", tags=["search"])
 
@@ -75,7 +75,7 @@ async def search(request: SearchRequest):
     - Filtering
     - Pagination
     """
-    results = await meilisearch_service.search(
+    results = await clickhouse_service.search(
         query=request.query,
         search_fields=request.search_fields,
         filter_by=request.filter_by,
@@ -95,7 +95,7 @@ async def search(request: SearchRequest):
 @router.post("/multi-query")
 async def multi_search(request: MultiSearchRequest):
     """Execute multiple searches in a single request"""
-    results = await meilisearch_service.multi_search(request.searches)
+    results = await clickhouse_service.multi_search(request.searches)
     return {"results": results}
 
 
@@ -104,7 +104,7 @@ async def get_collection_stats(
     collection: str = Query("silver_records", description="Collection name")
 ):
     """Get collection statistics"""
-    stats = await meilisearch_service.get_collection_stats(collection)
+    stats = await clickhouse_service.get_collection_stats(collection)
     if not stats:
         raise HTTPException(status_code=404, detail="Collection not found")
     return stats
@@ -120,24 +120,24 @@ async def get_facets(
     if fields:
         facet_fields = [f.strip() for f in fields.split(",")]
 
-    facets = await meilisearch_service.get_facets(collection, facet_fields)
+    facets = await clickhouse_service.get_facets(collection, facet_fields)
     return {"facets": facets}
 
 
 @router.get("/health")
 async def health_check():
-    """Check Meilisearch server health"""
-    return await meilisearch_service.health_check()
+    """Check ClickHouse server health"""
+    return await clickhouse_service.health_check()
 
 
 @router.get("/initialization-status")
 async def get_initialization_status():
-    """Get Meilisearch initialization status"""
-    return meilisearch_service.get_initialization_status()
+    """Get ClickHouse initialization status"""
+    return clickhouse_service.get_initialization_status()
 
 
 @router.post("/initialize")
 async def initialize_collections():
-    """Initialize required Meilisearch collections"""
-    results = await meilisearch_service.initialize_collections()
+    """Initialize required ClickHouse tables"""
+    results = await clickhouse_service.initialize_collections()
     return {"collections": results}

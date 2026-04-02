@@ -94,7 +94,7 @@ interface Props {
 }
 
 const props = withDefaults(defineProps<Props>(), {
-  initialPath: '/breaches'
+  initialPath: '/'
 })
 
 const emit = defineEmits<{

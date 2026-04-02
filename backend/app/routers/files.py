@@ -54,7 +54,7 @@ class ColumnMappingSuggestions(BaseModel):
 
 @router.get("/browse")
 async def browse_files(
-    path: str = Query("/home/quantic/tmp", description="Absolute path to browse"),
+    path: str = Query("/", description="Absolute path to browse"),
     mode: str = Query("directory", description="Browse mode: 'directory' or 'file'")
 ):
     """

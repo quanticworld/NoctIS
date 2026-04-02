@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime
 from pathlib import Path
 import logging
-from app.services.meilisearch_service import meilisearch_service
+from app.services.clickhouse_service import clickhouse_service
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ class MDMService:
     }
 
     def __init__(self):
-        self.client = meilisearch_service.client
+        self.client = clickhouse_service.client
         # Load strategies from config file or use defaults
         self.MATCH_STRATEGIES = self._load_match_strategies()
 
@@ -88,9 +88,9 @@ class MDMService:
 
             silver_docs.append(silver_doc)
 
-        # Import to Meilisearch (bulk API with upsert)
+        # Import to ClickHouse (bulk API with upsert)
         try:
-            result = await meilisearch_service.import_documents(
+            result = await clickhouse_service.import_documents(
                 documents=silver_docs,
                 collection_name='silver_records'
             )
@@ -134,8 +134,8 @@ class MDMService:
                 must_clauses.append({"term": {key: value}})
 
             try:
-                # Search for matching master using Elasticsearch
-                results = await meilisearch_service.search(
+                # Search for matching master using ClickHouse
+                results = await clickhouse_service.search(
                     query="*",
                     search_fields=[],
                     collection_name='master_records',
@@ -238,8 +238,8 @@ class MDMService:
         master_doc = {k: v for k, v in master_doc.items() if v is not None}
 
         try:
-            # Create document in Elasticsearch
-            result = await meilisearch_service.import_documents(
+            # Create document in ClickHouse
+            result = await clickhouse_service.import_documents(
                 documents=[master_doc],
                 collection_name='master_records'
             )
@@ -398,7 +398,7 @@ class MDMService:
                     break
 
                 # Fetch next batch of silver records
-                results = await meilisearch_service.search(
+                results = await clickhouse_service.search(
                     query="*",
                     search_fields=[],
                     collection_name='silver_records',
@@ -519,8 +519,8 @@ class MDMService:
             conflict_docs.append(conflict_doc)
 
         try:
-            # Use meilisearch_service to import conflicts
-            result = await meilisearch_service.import_documents(
+            # Use clickhouse_service to import conflicts
+            result = await clickhouse_service.import_documents(
                 documents=conflict_docs,
                 collection_name='conflicts'
             )
@@ -589,7 +589,7 @@ class MDMService:
             if master_id:
                 must_clauses.append({"term": {"master_id": master_id}})
 
-            results = await meilisearch_service.search(
+            results = await clickhouse_service.search(
                 query="*",
                 search_fields=[],
                 collection_name='conflicts',
