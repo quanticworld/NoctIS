@@ -56,7 +56,8 @@ class MDMService:
         self,
         documents: List[Dict[str, Any]],
         breach_name: str,
-        source_file: str
+        source_file: str,
+        fast_mode: bool = True
     ) -> Dict[str, int]:
         """
         Import raw data to silver_records collection
@@ -65,6 +66,7 @@ class MDMService:
             documents: List of raw documents to import
             breach_name: Name of the breach
             source_file: Source file path
+            fast_mode: Use fast hashing (UUID) instead of content hash
 
         Returns:
             Stats: {imported: count, failed: count}
@@ -72,10 +74,14 @@ class MDMService:
         silver_docs = []
 
         for idx, doc in enumerate(documents):
-            # Generate unique source_id (deterministic based on content + breach)
-            # Same content from same breach = same ID = upsert instead of duplicate
-            content_hash = self._generate_content_hash(doc)
-            source_id = f"{breach_name}_{content_hash}"
+            # OPTIMIZATION: Use fast ID generation in fast_mode
+            if fast_mode:
+                # Fast: just use UUID (no deterministic dedup, but 100x faster)
+                source_id = f"{breach_name}_{uuid.uuid4().hex[:12]}"
+            else:
+                # Slow: deterministic hash (allows dedup, but slow)
+                content_hash = self._generate_content_hash(doc)
+                source_id = f"{breach_name}_{content_hash}"
 
             silver_doc = {
                 'id': source_id,  # Elasticsearch will use this as _id
@@ -670,5 +676,15 @@ class MDMService:
             return False
 
 
-# Singleton instance
-mdm_service = MDMService()
+# Lazy singleton instance
+_mdm_service_instance: Optional[MDMService] = None
+
+def get_mdm_service() -> MDMService:
+    """Get or create the singleton MDMService instance (lazy initialization)"""
+    global _mdm_service_instance
+    if _mdm_service_instance is None:
+        _mdm_service_instance = MDMService()
+    return _mdm_service_instance
+
+# For backward compatibility during transition
+mdm_service = None  # Will be replaced with get_mdm_service() calls

@@ -10,6 +10,20 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
+def _retry_connect(func, max_retries=5, base_delay=1.0):
+    """Retry helper for ClickHouse connection with exponential backoff"""
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except Exception as e:
+            if attempt == max_retries - 1:
+                logger.error(f"Failed to connect to ClickHouse after {max_retries} attempts: {e}")
+                raise
+            delay = base_delay * (2 ** attempt)
+            logger.warning(f"ClickHouse connection attempt {attempt + 1}/{max_retries} failed: {e}. Retrying in {delay}s...")
+            time.sleep(delay)
+
+
 class ClickHouseClientWrapper:
     """
     Wrapper around ClickHouse client to provide Elasticsearch/Meilisearch-like API
@@ -414,19 +428,19 @@ class ClickHouseService:
 
     @property
     def client(self) -> ClickHouseClientWrapper:
-        """Get or create ClickHouse client (lazy initialization)"""
+        """Get or create ClickHouse client (lazy initialization with retry logic)"""
         if self._client is None:
-            # Create HTTP client (for queries)
-            ch_client = clickhouse_connect.get_client(
+            # Create HTTP client (for queries) with retry logic
+            ch_client = _retry_connect(lambda: clickhouse_connect.get_client(
                 host=settings.clickhouse_host,
                 port=settings.clickhouse_http_port,
                 username=settings.clickhouse_user,
                 password=settings.clickhouse_password,
                 database=settings.clickhouse_database
-            )
+            ))
 
-            # Create native client (for bulk inserts)
-            ch_driver = ClickHouseDriverClient(
+            # Create native client (for bulk inserts) with retry logic
+            ch_driver = _retry_connect(lambda: ClickHouseDriverClient(
                 host=settings.clickhouse_host,
                 port=settings.clickhouse_port,
                 user=settings.clickhouse_user,
@@ -436,9 +450,10 @@ class ClickHouseService:
                     'use_numpy': False,
                     'max_insert_block_size': settings.clickhouse_batch_size
                 }
-            )
+            ))
 
             self._client = ClickHouseClientWrapper(ch_client, ch_driver)
+            logger.info("Successfully connected to ClickHouse")
 
         return self._client
 
@@ -633,15 +648,31 @@ class ClickHouseService:
             # Build fuzzy search conditions
             search_conditions = []
             if query and query != '*':
+                # Split query into words for better multi-word matching
+                query_words = [w.strip() for w in query.split() if w.strip()]
+
                 for field in search_fields:
                     if typo_tolerance:
-                        # Use ngramDistance for fuzzy matching (0.4 = 40% tolerance)
-                        search_conditions.append(
-                            f"ngramDistance(lowerUTF8({field}), lowerUTF8('{query}')) < 0.4"
-                        )
+                        # For each word, create fuzzy conditions
+                        word_conditions = []
+                        for word in query_words:
+                            # Escape single quotes in word
+                            escaped_word = word.replace("'", "\\'")
+                            # Use ngramDistance for fuzzy matching (0.4 = 40% tolerance)
+                            word_conditions.append(
+                                f"ngramDistance(lowerUTF8({field}), lowerUTF8('{escaped_word}')) < 0.4"
+                            )
+                        # Field matches if ANY word matches (OR)
+                        if word_conditions:
+                            search_conditions.append('(' + ' OR '.join(word_conditions) + ')')
                     else:
-                        # Exact match
-                        search_conditions.append(f"lowerUTF8({field}) = lowerUTF8('{query}')")
+                        # Exact match (any word must match exactly)
+                        word_conditions = []
+                        for word in query_words:
+                            escaped_word = word.replace("'", "\\'")
+                            word_conditions.append(f"lowerUTF8({field}) = lowerUTF8('{escaped_word}')")
+                        if word_conditions:
+                            search_conditions.append('(' + ' OR '.join(word_conditions) + ')')
 
             # Build filter conditions
             filter_conditions = []
@@ -708,7 +739,9 @@ class ClickHouseService:
         Convert Typesense filter format to ClickHouse WHERE conditions
 
         Typesense: "field:value && field2:value2"
-        ClickHouse: ["field = 'value'", "field2 = 'value2'"]
+        ClickHouse: ["lowerUTF8(field) = lowerUTF8('value')", ...]
+
+        Uses case-insensitive matching for better UX
         """
         parts = filter_by.split(' && ')
         conditions = []
@@ -718,7 +751,9 @@ class ClickHouseService:
                 field, value = part.split(':', 1)
                 field = field.strip()
                 value = value.strip().strip('"').strip("'")
-                conditions.append(f"{field} = '{value}'")
+                # Case-insensitive matching
+                escaped_value = value.replace("'", "\\'")
+                conditions.append(f"lowerUTF8({field}) = lowerUTF8('{escaped_value}')")
 
         return conditions
 

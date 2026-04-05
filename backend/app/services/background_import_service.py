@@ -33,7 +33,8 @@ class ImportJob:
         breach_name: str,
         column_mapping: Dict[str, str],
         breach_date: Optional[int] = None,
-        batch_size: int = 1000
+        batch_size: int = 1000,
+        turbo_mode: bool = False
     ):
         self.job_id = job_id
         self.file_path = file_path
@@ -41,6 +42,7 @@ class ImportJob:
         self.column_mapping = column_mapping
         self.breach_date = breach_date
         self.batch_size = batch_size
+        self.turbo_mode = turbo_mode
 
         # Status tracking
         self.status = ImportStatus.PENDING
@@ -155,7 +157,8 @@ class BackgroundImportService:
         breach_name: str,
         column_mapping: Dict[str, str],
         breach_date: Optional[int] = None,
-        batch_size: int = 1000
+        batch_size: int = 1000,
+        turbo_mode: bool = False
     ) -> ImportJob:
         """Create a new import job"""
         job_id = str(uuid.uuid4())
@@ -165,7 +168,8 @@ class BackgroundImportService:
             breach_name=breach_name,
             column_mapping=column_mapping,
             breach_date=breach_date,
-            batch_size=batch_size
+            batch_size=batch_size,
+            turbo_mode=turbo_mode
         )
         self.jobs[job_id] = job
         self._save_jobs()

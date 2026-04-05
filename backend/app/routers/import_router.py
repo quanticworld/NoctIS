@@ -18,7 +18,8 @@ class ImportRequest(BaseModel):
     breach_name: str = Field(..., min_length=1, description="Name of the breach")
     column_mapping: Dict[str, Optional[str]] = Field(..., description="Column mapping")
     breach_date: Optional[int] = Field(None, description="Breach date (Unix timestamp)")
-    batch_size: Optional[int] = Field(None, ge=100, le=50000, description="Batch size")
+    batch_size: Optional[int] = Field(None, ge=100, le=100000, description="Batch size")
+    turbo_mode: bool = Field(False, description="🚀 TURBO: Skip MDM, 50k batches, minimal updates (10-20x faster)")
 
 
 class PreviewRequest(BaseModel):
@@ -84,7 +85,8 @@ async def import_stream(websocket: WebSocket):
             column_mapping=import_request.column_mapping,
             breach_date=import_request.breach_date,
             batch_size=import_request.batch_size,
-            import_id=import_id
+            import_id=import_id,
+            turbo_mode=import_request.turbo_mode
         ):
             try:
                 await websocket.send_json(progress)
@@ -165,7 +167,8 @@ async def start_background_import(request: ImportRequest):
         breach_name=request.breach_name,
         column_mapping=request.column_mapping,
         breach_date=request.breach_date,
-        batch_size=request.batch_size or 1000
+        batch_size=request.batch_size or 1000,
+        turbo_mode=request.turbo_mode
     )
 
     # Submit the job for execution

@@ -2,7 +2,7 @@
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
-from app.services.mdm_service import mdm_service
+from app.services.mdm_service import get_mdm_service
 import logging
 
 router = APIRouter(prefix="/mdm", tags=["mdm"])
@@ -34,16 +34,16 @@ async def get_mdm_stats():
     """
     try:
         # Get collection stats from Elasticsearch
-        silver_count = mdm_service.client.count(index='silver_records')
-        master_count = mdm_service.client.count(index='master_records')
+        silver_count = get_mdm_service().client.count(index='silver_records')
+        master_count = get_mdm_service().client.count(index='master_records')
 
         # Count by status
-        golden_count = mdm_service.client.count(
+        golden_count = get_mdm_service().client.count(
             index='master_records',
             query={"term": {"status": "golden"}}
         )
 
-        silver_status_count = mdm_service.client.count(
+        silver_status_count = get_mdm_service().client.count(
             index='master_records',
             query={"term": {"status": "silver"}}
         )
@@ -51,7 +51,7 @@ async def get_mdm_stats():
         # Count unlinked silver records
         total_silver = silver_count['count']
         try:
-            linked_count = mdm_service.client.count(
+            linked_count = get_mdm_service().client.count(
                 index='silver_records',
                 query={"exists": {"field": "master_id"}}
             )
@@ -97,7 +97,7 @@ async def import_to_silver(request: ImportToSilverRequest):
         }
     """
     try:
-        result = await mdm_service.import_to_silver(
+        result = await get_mdm_service().import_to_silver(
             documents=request.documents,
             breach_name=request.breach_name,
             source_file=request.source_file
@@ -127,7 +127,7 @@ async def run_deduplication(
     Set max_batches to limit processing (useful for large datasets).
     """
     try:
-        stats = await mdm_service.process_silver_deduplication(batch_size, max_batches)
+        stats = await get_mdm_service().process_silver_deduplication(batch_size, max_batches)
         return stats
     except Exception as e:
         logger.error(f"Deduplication failed: {e}")
@@ -143,7 +143,7 @@ async def get_breaches():
     """
     try:
         # Use Elasticsearch aggregations to get breach counts
-        response = mdm_service.client.search(
+        response = get_mdm_service().client.search(
             index='silver_records',
             size=0,
             aggs={
@@ -186,13 +186,13 @@ async def delete_breach(breach_name: str):
         logger.info(f"Deleting breach: {breach_name}")
 
         # Count records before deletion
-        silver_count_before = mdm_service.client.count(
+        silver_count_before = get_mdm_service().client.count(
             index='silver_records',
             query={"term": {"breach_name": breach_name}}
         )
 
         # Delete all silver records from this breach
-        delete_response = mdm_service.client.delete_by_query(
+        delete_response = get_mdm_service().client.delete_by_query(
             index='silver_records',
             query={"term": {"breach_name": breach_name}},
             conflicts='proceed'
@@ -203,7 +203,7 @@ async def delete_breach(breach_name: str):
 
         # Update masters: remove this breach from breach_names array
         # Find all masters that have this breach
-        masters_with_breach = mdm_service.client.search(
+        masters_with_breach = get_mdm_service().client.search(
             index='master_records',
             query={"term": {"breach_names": breach_name}},
             size=10000
@@ -222,14 +222,14 @@ async def delete_breach(breach_name: str):
 
                 # If no more breaches, delete the master
                 if len(breach_names) == 0:
-                    mdm_service.client.delete(
+                    get_mdm_service().client.delete(
                         index='master_records',
                         id=master_id
                     )
                     deleted_masters += 1
                 else:
                     # Otherwise, update the master
-                    mdm_service.client.update(
+                    get_mdm_service().client.update(
                         index='master_records',
                         id=master_id,
                         doc={'breach_names': breach_names}
@@ -290,7 +290,7 @@ async def list_masters(
 
         # Search with Elasticsearch
         from_ = (page - 1) * per_page
-        response = mdm_service.client.search(
+        response = get_mdm_service().client.search(
             index='master_records',
             query=es_query,
             from_=from_,
@@ -316,7 +316,7 @@ async def clear_all_data():
     try:
         # Delete all silver records
         try:
-            mdm_service.client.delete_by_query(
+            get_mdm_service().client.delete_by_query(
                 index='silver_records',
                 query={"match_all": {}}
             )
@@ -326,7 +326,7 @@ async def clear_all_data():
 
         # Delete all master records
         try:
-            mdm_service.client.delete_by_query(
+            get_mdm_service().client.delete_by_query(
                 index='master_records',
                 query={"match_all": {}}
             )
@@ -335,8 +335,8 @@ async def clear_all_data():
             logger.error(f"Failed to delete master records: {e}")
 
         # Get final counts
-        silver_count = mdm_service.client.count(index='silver_records')
-        master_count = mdm_service.client.count(index='master_records')
+        silver_count = get_mdm_service().client.count(index='silver_records')
+        master_count = get_mdm_service().client.count(index='master_records')
 
         return {
             'status': 'success',

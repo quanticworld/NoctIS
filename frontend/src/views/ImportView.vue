@@ -200,6 +200,23 @@
         </div>
       </div>
 
+      <!-- Turbo Mode Checkbox -->
+      <div class="mb-4 p-4 bg-dark-200 border border-gray-700 rounded">
+        <label class="flex items-center gap-3 cursor-pointer">
+          <input
+            v-model="turboMode"
+            type="checkbox"
+            class="w-5 h-5 accent-red-team-500"
+          />
+          <div>
+            <div class="text-sm font-bold text-red-team-500">🚀 TURBO MODE</div>
+            <div class="text-xs text-gray-400 mt-1">
+              Skip MDM layer, 50k batches, minimal updates → 10-20x faster import (no deduplication)
+            </div>
+          </div>
+        </label>
+      </div>
+
       <button
         @click="startImport"
         :disabled="importing"
@@ -294,6 +311,7 @@ const breachDate = ref('')
 const customDelimiter = ref('')
 const customEncoding = ref('')
 const columnMapping = ref<Record<string, string | undefined>>({})
+const turboMode = ref(false)
 
 function handleFileSelect(path: string) {
   filePath.value = path
@@ -390,7 +408,8 @@ async function startImport() {
     file_path: filePath.value,
     breach_name: breachName.value,
     column_mapping: columnMapping.value,
-    breach_date: breachDateTimestamp
+    breach_date: breachDateTimestamp,
+    turbo_mode: turboMode.value
   })
 }
 

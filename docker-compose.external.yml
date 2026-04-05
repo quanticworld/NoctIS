@@ -46,10 +46,8 @@ services:
       - "9000:9000"    # Native protocol
       - "8123:8123"    # HTTP interface
     volumes:
-      # Production: Use external data volume (same USB drive as meilisearch)
-      - /media/quantic/80c1859f-536b-459f-a547-d6ecf1dfceea/home/quantic/NoctIS/data/clickhouse:/var/lib/clickhouse
-      # Development: Use local docker volume (uncomment to use instead)
-      # - clickhouse-data:/var/lib/clickhouse
+      # EXTERNAL OS: Direct path since we're running ON the external disk
+      - /home/quantic/NoctIS/data/clickhouse:/var/lib/clickhouse
       # Mount init SQL scripts
       - ./backend/sql/clickhouse:/docker-entrypoint-initdb.d
     environment:
@@ -64,10 +62,10 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-      start_period: 30s
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 20s
 
 volumes:
   clickhouse-data:

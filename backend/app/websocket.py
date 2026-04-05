@@ -173,7 +173,7 @@ async def websocket_endpoint(websocket: WebSocket):
             elif action == "deduplication":
                 # Run deduplication with progress updates
                 try:
-                    from app.services.mdm_service import mdm_service
+                    from app.services.mdm_service import get_mdm_service
 
                     params = data.get("data", {})
                     batch_size = params.get("batch_size", 250)
@@ -184,7 +184,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         await manager.send_message(websocket, progress_data)
 
                     # Run deduplication with progress callback
-                    stats = await mdm_service.process_silver_deduplication(
+                    stats = await get_mdm_service().process_silver_deduplication(
                         batch_size=batch_size,
                         max_batches=max_batches,
                         progress_callback=send_progress

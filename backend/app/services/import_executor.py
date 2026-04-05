@@ -43,15 +43,16 @@ class ImportExecutor:
                 breach_date=job.breach_date,
                 batch_size=job.batch_size,
                 import_id=job_id,
-                skip_lines=skip_lines
+                skip_lines=skip_lines,
+                turbo_mode=job.turbo_mode
             ):
                 # Update job progress
                 await background_import_service.update_progress(
                     job_id=job_id,
-                    total_lines=progress.get('total_lines'),
-                    processed_lines=progress.get('processed'),
+                    total_lines=progress.get('total_rows'),      # Fixed: was 'total_lines'
+                    processed_lines=progress.get('rows_processed'),  # Fixed: was 'processed'
                     imported_count=progress.get('imported'),
-                    error_count=progress.get('errors'),
+                    error_count=progress.get('failed'),          # Fixed: was 'errors'
                     current_batch=progress.get('current_batch'),
                     total_batches=progress.get('total_batches')
                 )
